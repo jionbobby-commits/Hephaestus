@@ -1,5 +1,3 @@
-from sysconfig import __main__
-
 from fastapi import FastAPI
 app = FastAPI()
 
