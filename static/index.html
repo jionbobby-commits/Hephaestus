@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hephaestus 记事本</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app" id="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <span class="brand-logo" data-icon="sprout" data-size="34"></span>
+      <div><div class="brand-name">Hephaestus</div><div class="brand-sub">Note · Create · Organize</div></div>
+    </div>
+    <nav class="nav" id="nav"></nav>
+    <div class="tag-head"><span>标签</span><button class="icon-btn" id="tagManageBtn" title="标签管理" data-icon="plus"></button></div>
+    <ul class="tag-list" id="tagList"></ul>
+    <div class="storage" id="storage"></div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+
+  <main class="main" id="main">
+    <header class="topbar">
+      <button class="icon-btn only-mobile" id="menuBtn" title="菜单" data-icon="menu"></button>
+      <label class="search"><span data-icon="search"></span><input id="search" type="search" placeholder="搜索笔记..." autocomplete="off"><kbd>Ctrl + K</kbd></label>
+      <div class="top-actions">
+        <button class="icon-btn" id="themeBtn" title="切换深色 / 浅色模式"></button>
+        <button class="icon-btn" id="moreBtn" title="更多操作" data-icon="settings"></button>
+      </div>
+    </header>
+
+    <div class="body">
+      <section class="list-pane">
+        <div class="list-head">
+          <button class="list-title" id="sortBtn" title="排序方式"><span id="listTitle">全部笔记</span><span data-icon="chevron-down" data-size="16"></span></button>
+          <div class="seg" id="layoutSeg">
+            <button data-layout="list" title="列表视图" data-icon="list"></button>
+            <button data-layout="grid" title="网格视图" data-icon="grid"></button>
+          </div>
+        </div>
+        <div class="note-list" id="noteList"></div>
+        <button class="new-bar" id="newBar"><span data-icon="plus"></span>新建笔记</button>
+      </section>
+
+      <section class="editor-pane" id="editorPane">
+        <div class="empty" id="empty">
+          <svg class="empty-art" viewBox="0 0 260 200" aria-hidden="true">
+            <defs>
+              <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e9f7ee"/><stop offset="1" stop-color="#bfe3cc"/></linearGradient>
+              <linearGradient id="g2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6cc58c"/><stop offset="1" stop-color="#2f9a5d"/></linearGradient>
+            </defs>
+            <ellipse cx="130" cy="176" rx="80" ry="9" fill="#cfe7d8" opacity=".6"/>
+            <rect x="62" y="24" width="124" height="146" rx="14" fill="url(#g1)"/>
+            <rect x="80" y="54" width="70" height="7" rx="3.5" fill="#fff" opacity=".9"/>
+            <rect x="80" y="74" width="56" height="7" rx="3.5" fill="#fff" opacity=".9"/>
+            <rect x="80" y="94" width="40" height="7" rx="3.5" fill="#fff" opacity=".9"/>
+            <path d="M206 70c-30 4-54 26-62 62l-6 22 18-10c26-8 46-30 50-74z" fill="url(#g2)"/>
+            <path d="M140 152c16-26 34-46 56-62" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round" opacity=".7"/>
+            <circle cx="34" cy="74" r="4" fill="#59c184"/><circle cx="226" cy="118" r="3" fill="#59c184"/>
+          </svg>
+          <h2>欢迎使用赫淮斯托斯</h2>
+          <p>记录灵感，整理思绪，让知识更有价值</p>
+          <button class="btn primary" id="emptyNew"><span data-icon="pencil" data-size="16"></span>新建笔记</button>
+        </div>
+
+        <div class="editor" id="editor" hidden>
+          <div class="toolbar" id="toolbar">
+            <select id="headingSel" class="tb-select" title="标题级别">
+              <option value="">正文</option><option value="h1">标题 1</option><option value="h2">标题 2</option><option value="h3">标题 3</option>
+            </select>
+            <span class="sep"></span>
+            <button data-cmd="bold" title="加粗 (Ctrl+B)" data-icon="bold"></button>
+            <button data-cmd="italic" title="斜体 (Ctrl+I)" data-icon="italic"></button>
+            <button data-cmd="underline" title="下划线" data-icon="underline"></button>
+            <button data-cmd="strikeThrough" title="删除线" data-icon="strike"></button>
+            <span class="sep"></span>
+            <button data-cmd="link" title="超链接" data-icon="link"></button>
+            <button data-cmd="image" title="插入图片" data-icon="image"></button>
+            <button data-cmd="table" title="插入表格" data-icon="table"></button>
+            <span class="sep"></span>
+            <button data-cmd="ol" title="有序列表" data-icon="list-ordered"></button>
+            <button data-cmd="ul" title="无序列表" data-icon="list"></button>
+            <button data-cmd="task" title="任务清单" data-icon="check-square"></button>
+            <span class="sep"></span>
+            <button data-cmd="undo" title="撤销" data-icon="undo"></button>
+            <button data-cmd="redo" title="重做" data-icon="redo"></button>
+            <span class="grow"></span>
+            <button data-cmd="fullscreen" id="fsBtn" title="全屏编辑" data-icon="maximize"></button>
+          </div>
+          <div class="doc">
+            <div class="doc-meta">
+              <button class="icon-btn only-mobile" id="backBtn" title="返回列表" data-icon="arrow-left"></button>
+              <span class="grow"></span>
+              <button class="icon-btn" id="favBtn" title="收藏"></button>
+              <button class="icon-btn" id="exportBtn" title="导出" data-icon="download"></button>
+              <button class="icon-btn" id="delBtn" title="删除"></button>
+              <button class="icon-btn" id="restoreBtn" title="恢复" data-icon="rotate-ccw" hidden></button>
+            </div>
+            <input class="title" id="title" placeholder="无标题笔记" maxlength="120" autocomplete="off">
+            <div class="note-tags" id="noteTags"></div>
+            <div class="content is-empty" id="content" contenteditable="true" spellcheck="false" data-placeholder="开始写点什么…  支持 Markdown：# 标题、- 列表、1. 有序列表、[] 任务、&gt; 引用"></div>
+          </div>
+          <footer class="statusbar"><span id="wordCount">0 字</span><span id="saveState">已保存</span></footer>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+<input type="file" id="imgInput" accept="image/*" hidden>
+<input type="file" id="mdInput" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple hidden>
+<script src="/static/script.js"></script>
+</body>
+</html>
