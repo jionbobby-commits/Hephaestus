@@ -80,10 +80,47 @@ const Store = (() => {
     if (!data || !Array.isArray(data.notes)) data = seed();
     data.ui = { theme: 'light', layout: 'list', sort: 'updated', ...data.ui };
   };
-  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(data)); return true; } catch { return false; } };
+  let remoteSaveTimer = null;
+  const save = () => {
+    try { localStorage.setItem(KEY, JSON.stringify(data)); } catch { return false; }
+    clearTimeout(remoteSaveTimer);
+    remoteSaveTimer = setTimeout(async () => {
+      try {
+        const response = await fetch('/api/state', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        });
+        if (!response.ok) throw new Error('API save failed');
+      } catch (error) {
+        console.error('Hephaestus backend sync failed:', error);
+      }
+    }, 350);
+    return true;
+  };
+  const hydrateRemote = async () => {
+    try {
+      const response = await fetch('/api/state');
+      if (!response.ok) throw new Error('API load failed');
+      const result = await response.json();
+      if (result.initialized && result.state) {
+        data = result.state;
+        data.ui = { theme: 'light', layout: 'list', sort: 'updated', ...data.ui };
+        try { localStorage.setItem(KEY, JSON.stringify(data)); } catch {}
+      } else {
+        await fetch('/api/state', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        });
+      }
+    } catch (error) {
+      console.warn('Hephaestus backend unavailable; using browser cache:', error);
+    }
+  };
   const size = () => (localStorage.getItem(KEY) || '').length * 2;
   load();
-  return { get data() { return data; }, save, size, QUOTA, day };
+  return { get data() { return data; }, save, hydrateRemote, size, QUOTA, day };
 })();
 
 /* ===================== Markdown conversion ===================== */
@@ -538,5 +575,6 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) flush
 
 /* ===================== Boot ===================== */
 Icons.hydrate(); applyTheme();
-state.sel = null; renderAll();
+state.sel = null;
+Store.hydrateRemote().finally(() => { renderAll(); });
 })();
