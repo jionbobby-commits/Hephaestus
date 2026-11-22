@@ -137,3 +137,9 @@ def test_rejects_invalid_frontend_state(client):
 def test_page_size_limit(client):
     response = client.get("/notes?page_size=101")
     assert response.status_code == 422
+
+
+def test_patch_rejects_null_values(client):
+    note = create_sample(client)
+    response = client.patch(f"/notes/{note['id']}", json={"title": None})
+    assert response.status_code == 422
