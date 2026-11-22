@@ -1,10 +1,11 @@
 from datetime import datetime
+from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class NoteBase(BaseModel):
-    title: str = Field(max_length=100)
+    title: str = Field(min_length=1, max_length=100)
     content: str = Field(default="", max_length=10000)
     category: str = Field(default="未分类", max_length=30)
 
@@ -28,7 +29,7 @@ class NoteCreate(NoteBase):
 
 
 class NoteUpdate(NoteBase):
-    pass
+    is_favorite: bool = False
 
 
 class NoteRead(BaseModel):
@@ -46,3 +47,11 @@ class NoteList(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class FrontendStatePayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    notes: list[dict[str, Any]]
+    tags: list[dict[str, Any]]
+    ui: dict[str, Any] = Field(default_factory=dict)
