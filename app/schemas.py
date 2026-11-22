@@ -48,6 +48,8 @@ class NoteUpdate(BaseModel):
     def require_changes(self):
         if not self.model_fields_set:
             raise ValueError("至少提供一个需要更新的字段")
+        if any(getattr(self, field) is None for field in self.model_fields_set):
+            raise ValueError("更新字段不能为 null")
         return self
 
 
