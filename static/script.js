@@ -573,8 +573,26 @@ window.addEventListener('beforeunload', () => { if (dirty) Store.save(); });
 window.addEventListener('pagehide', () => { if (dirty) Store.save(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); });
 
+/* ===================== Release download ===================== */
+const applyRelease = async () => {
+  const link = $('#downloadLink'), meta = $('#dlMeta');
+  if (!link) return;
+  try {
+    const response = await fetch('/api/release');
+    if (!response.ok) throw new Error('release metadata unavailable');
+    const info = await response.json();
+    link.href = info.download_url;
+    link.title = `下载 Hephaestus Windows 版 V${info.version}`;
+    link.setAttribute('aria-label', `下载 Hephaestus Windows 版 V${info.version}`);
+    if (meta) meta.textContent = `V${info.version} · ${(info.size_bytes / 1048576).toFixed(1)} MB`;
+  } catch (error) {
+    console.warn('Hephaestus release metadata unavailable:', error);
+  }
+};
+
 /* ===================== Boot ===================== */
-Icons.hydrate(); applyTheme();
+if (new URLSearchParams(location.search).has('desktop')) document.documentElement.dataset.desktop = '1';
+Icons.hydrate(); applyTheme(); applyRelease();
 state.sel = null;
 Store.hydrateRemote().finally(() => { renderAll(); });
 })();

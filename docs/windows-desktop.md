@@ -1,8 +1,8 @@
-# Hephaestus V1.2.1 Windows 安装与桌面版
+# Hephaestus V1.3.0 Windows 安装与桌面版
 
-V1.2.1 在 V1.2 基础上修复了启动后健康检查误报，并补齐健康检查回归测试。
-V1.2 已提供安装程序、WebView2 检测、正式图标、版本信息和安装/升级/卸载测试。应用仍然是本地优先的：后端只监听 127.0.0.1，
-笔记保存在本机 SQLite 文件，不依赖浏览器、不联网、不上传数据。
+V1.3.0 在 V1.2.1 基础上固定了桌面窗口布局：顶栏和侧栏固定，只有笔记列表和编辑区内部滚动；
+网页端新增 Windows 下载入口，发布页提供安装包、便携版、单文件版和 SHA256。
+应用仍然是本地优先的：后端只监听 127.0.0.1，笔记保存在本机 SQLite 文件，不依赖浏览器、不联网、不上传数据。
 
 ## 系统要求
 
@@ -10,9 +10,24 @@ V1.2 已提供安装程序、WebView2 检测、正式图标、版本信息和安
 - Microsoft Edge WebView2 Runtime（Windows 10/11 通常已预装）
 - 不需要安装 Python，也不需要浏览器
 
+## 窗口布局与滚动
+
+V1.3.0 使用真正的桌面应用布局：
+
+- 整个应用外壳固定，窗口滚动条不会让页面整体上下移动；
+- 顶部搜索栏、左侧导航和右侧编辑工具栏保持固定；
+- 笔记列表在列表区域内独立滚动，鼠标在列表上滚动只移动列表；
+- 长笔记只在正文区域内部滚动，不影响顶栏、列表和状态栏；
+- 弹窗、菜单和侧边栏使用 overscroll-behavior: contain，避免滚动穿透；
+- 窗口缩放后布局仍然固定，列表和正文继续各自滚动。
+
+实现使用 CSS Grid/Flex、min-height: 0、overflow: hidden/auto 和 100dvh，
+没有用固定像素高度硬撑，也没有改动现有深色主题、绿色主色、圆角和卡片样式。
+Web 版与 pywebview 桌面版共用同一套样式，鼠标滚轮、触摸板和滚动条都适用。
+
 ## 安装版（推荐）
 
-运行 **Hephaestus-Setup-1.2.1.exe**：
+运行 **Hephaestus-Setup-1.3.0.exe**：
 
 1. 安装程序先检测 WebView2 Runtime；缺失时给出中文提示，并可打开微软官方下载页。
 2. 默认安装到 **%LOCALAPPDATA%\Programs\Hephaestus**，按用户安装，不需要管理员权限；
@@ -25,7 +40,7 @@ V1.2 已提供安装程序、WebView2 检测、正式图标、版本信息和安
 
 静默安装（供脚本或批量部署）：
 
-    Hephaestus-Setup-1.2.1.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /DIR="D:\Apps\Hephaestus" /TASKS=""
+    Hephaestus-Setup-1.3.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /DIR="D:\Apps\Hephaestus" /TASKS=""
 
 ### 覆盖升级
 
@@ -50,8 +65,8 @@ Hephaestus；安装程序也会尝试关闭占用文件的实例。
 
 ## 便携版
 
-- **Hephaestus-Portable-1.2.1.zip**：解压后运行 **Hephaestus\Hephaestus.exe**，无需安装。
-- **Hephaestus-1.2.1-onefile.exe**：单文件版本，双击即可运行。
+- **Hephaestus-Portable-1.3.0.zip**：解压后运行 **Hephaestus\Hephaestus.exe**，无需安装。
+- **Hephaestus-1.3.0-onefile.exe**：单文件版本，双击即可运行。
 
 便携版默认仍然把数据写到 **%LOCALAPPDATA%\Hephaestus**。如果希望数据跟着程序走：
 
@@ -76,6 +91,13 @@ Hephaestus；安装程序也会尝试关闭占用文件的实例。
 检测到 WebView2 返回 0，未检测到返回 3。安装程序也会在安装前做同样的注册表检测。
 
 官方下载页：https://developer.microsoft.com/microsoft-edge/webview2/
+
+## Web 页面下载入口
+
+Web 版右上角、搜索框右侧显示「Windows 版」入口，包含 Windows 图标、版本号和安装包大小。
+入口读取 GET /api/release，并跳转到 GitHub Release 中的真实安装包；桌面窗口通过 ?desktop=1
+自动隐藏该入口，避免桌面用户重复下载。版本号、文件名、大小和下载地址集中在 app/release.py，
+发版时只需修改这一处配置并重新构建。
 
 ## 数据目录与备份
 
@@ -149,8 +171,8 @@ backups\，最后原子替换目标数据库。任何一步失败都不会修改
     & "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" installer\Hephaestus.iss
 
     # 5. 便携版与校验和
-    Compress-Archive -Path dist\Hephaestus -DestinationPath dist\Hephaestus-Portable-1.2.1.zip -Force
-    Get-FileHash dist\installer\Hephaestus-Setup-1.2.1.exe, dist\Hephaestus-Portable-1.2.1.zip, dist\Hephaestus-1.2.1-onefile.exe -Algorithm SHA256
+    Compress-Archive -Path dist\Hephaestus -DestinationPath dist\Hephaestus-Portable-1.3.0.zip -Force
+    Get-FileHash dist\installer\Hephaestus-Setup-1.3.0.exe, dist\Hephaestus-Portable-1.3.0.zip, dist\Hephaestus-1.3.0-onefile.exe -Algorithm SHA256
 
 - 打包配置：build/Hephaestus.spec，入口 desktop_launcher.py，静态资源 static/ 会一起打包。
 - 版本信息：VERSION、desktop/__init__.py、build/version_info.txt 和安装脚本中的版本号需要一致。
@@ -183,5 +205,5 @@ backups\，最后原子替换目标数据库。任何一步失败都不会修改
 - tests/test_healthcheck.py：健康检查地址规范化、失败分类、慢启动、宽限期、瞬时抖动、线程退出和关停不误报
 - tests/test_installer.py：静默安装、启动、写入笔记、覆盖升级、卸载保留数据、重装读取旧数据
 
-安装包测试需要先构建 dist/Hephaestus 和 dist/installer/Hephaestus-Setup-1.2.1.exe；
+安装包测试需要先构建 dist/Hephaestus 和 dist/installer/Hephaestus-Setup-1.3.0.exe；
 缺少产物时会整体跳过，其余测试不受影响。

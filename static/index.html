@@ -24,6 +24,11 @@
     <header class="topbar">
       <button class="icon-btn only-mobile" id="menuBtn" title="菜单" data-icon="menu"></button>
       <label class="search"><span data-icon="search"></span><input id="search" type="search" placeholder="搜索笔记..." autocomplete="off"><kbd>Ctrl + K</kbd></label>
+      <a class="download-pill" id="downloadLink" href="/download/windows" target="_blank" rel="noopener" title="下载 Windows 桌面版安装包" aria-label="下载 Windows 桌面版安装包">
+        <svg class="win-mark" width="17" height="17" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M3 4.8 10.4 3.4v7.7H3V4.8Zm9.1-1.6L21 1.5v9.6h-8.9V3.2ZM3 12.7h7.4v7.7L3 19.1v-6.4Zm9.1 0H21v9.5l-8.9-1.4v-8.1Z"/></svg>
+        <span class="dl-copy"><b>Windows 版</b><small id="dlMeta">桌面安装包 · 离线可用</small></span>
+        <span class="dl-arrow" data-icon="download" data-size="15"></span>
+      </a>
       <div class="top-actions">
         <button class="icon-btn" id="themeBtn" title="切换深色 / 浅色模式"></button>
         <button class="icon-btn" id="moreBtn" title="更多操作" data-icon="settings"></button>

@@ -1,4 +1,4 @@
-"""Hephaestus V1.2.1 Windows 桌面端入口。
+"""Hephaestus V1.3.0 Windows 桌面端入口。
 
 启动流程：
 1. 检测 Microsoft WebView2 Runtime，缺失时给出中文安装指引并退出；
@@ -244,9 +244,10 @@ def run_window(args: argparse.Namespace) -> int:
             )
             return 1
 
+        page_url = f"{url}?desktop=1"
         window = webview.create_window(
             "Hephaestus",
-            url,
+            page_url,
             width=1280,
             height=820,
             min_size=(960, 600),
@@ -259,7 +260,7 @@ def run_window(args: argparse.Namespace) -> int:
                 title = window.evaluate_js("document.title")
             except Exception:  # noqa: BLE001 - 仅用于日志
                 title = "?"
-            LOGGER.info("桌面窗口已连接本地服务: url=%s document.title=%s", url, title)
+            LOGGER.info("桌面窗口已连接本地服务: url=%s document.title=%s", page_url, title)
 
         closing_state = {"flushing": False}
 
@@ -305,7 +306,7 @@ def run_window(args: argparse.Namespace) -> int:
             stop_event=watch_stop,
             startup_grace=5.0,
         )
-        LOGGER.info("打开桌面窗口: %s", url)
+        LOGGER.info("打开桌面窗口: %s", page_url)
         webview.start(debug=False, private_mode=False)
         LOGGER.info("窗口已关闭")
         return 0

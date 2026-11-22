@@ -143,3 +143,44 @@ def test_patch_rejects_null_values(client):
     note = create_sample(client)
     response = client.patch(f"/notes/{note['id']}", json={"title": None})
     assert response.status_code == 422
+
+
+def test_release_metadata(client):
+    from app.release import INSTALLER_NAME, VERSION, release_info
+
+    response = client.get("/api/release")
+    assert response.status_code == 200
+    body = response.json()
+    assert body == release_info()
+    assert body["version"] == VERSION
+    assert body["installer"] == INSTALLER_NAME
+    assert body["size_bytes"] > 1_000_000
+    assert body["download_url"].endswith("/" + INSTALLER_NAME)
+    assert body["download_url"].startswith("https://github.com/jionbobby-commits/Hephaestus/releases/download/")
+    assert body["release_url"].startswith("https://github.com/jionbobby-commits/Hephaestus/releases/tag/")
+    assert body["platform"] == "Windows 10/11 x64"
+
+
+def test_windows_download_redirects_to_release_asset(client):
+    from app.release import release_info
+
+    response = client.get("/download/windows", follow_redirects=False)
+    assert response.status_code == 307
+    assert response.headers["location"] == release_info()["download_url"]
+
+
+def test_home_contains_windows_download_entry(client):
+    response = client.get("/")
+    assert response.status_code == 200
+    html = response.text
+    assert 'id="downloadLink"' in html
+    assert 'href="/download/windows"' in html
+    assert "Windows 版" in html
+    assert 'id="dlMeta"' in html
+
+
+def test_stylesheet_keeps_shell_fixed_and_inner_scroll(client):
+    css = client.get("/static/style.css").text
+    assert "html,body{height:100%;overflow:hidden" in css.replace(" ", "")
+    assert "overscroll-behavior:contain" in css
+    assert "grid-template-rows:minmax(0,1fr)" in css

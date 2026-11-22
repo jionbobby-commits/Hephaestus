@@ -1,4 +1,4 @@
-﻿; Hephaestus V1.2.1 Windows 安装脚本（Inno Setup 6.5+）
+; Hephaestus V1.3.0 Windows 安装脚本（Inno Setup 6.5+）
 ; 设计要点：
 ; 1. 默认按用户安装到 %LOCALAPPDATA%\Programs\Hephaestus，无需管理员权限；
 ; 2. 用户数据始终位于 %LOCALAPPDATA%\Hephaestus（数据库、日志、配置），与安装目录分离；
@@ -8,7 +8,7 @@
 ; 6. 禁止把程序安装到用户数据目录，避免误删风险。
 
 #define AppName "Hephaestus"
-#define AppVersion "1.2.1"
+#define AppVersion "1.3.0"
 #define AppPublisher "Hephaestus"
 #define AppExeName "Hephaestus.exe"
 #define AppGuid "{{7C4E2B1A-9F3D-4A6E-8B52-1D9C0E7A3F64}"
@@ -41,11 +41,11 @@ WizardStyle=modern
 CloseApplications=yes
 RestartApplications=no
 AppMutex=Hephaestus-Desktop-V1.1
-VersionInfoVersion=1.2.1
+VersionInfoVersion=1.3.0
 VersionInfoCompany={#AppPublisher}
 VersionInfoDescription=Hephaestus {#AppVersion} 安装程序
 VersionInfoProductName={#AppName}
-VersionInfoProductVersion=1.2.1
+VersionInfoProductVersion=1.3.0
 VersionInfoOriginalFileName=Hephaestus-Setup-{#AppVersion}.exe
 
 [Languages]
@@ -57,8 +57,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 ; PyInstaller onedir 产物：Hephaestus.exe + _internal（含 static 前端资源）
 Source: "..\dist\Hephaestus\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-; 随程序安装的说明文档（不包含任何用户数据）
-Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
+; 随程序安装的说明文档（不包含任何用户数据；README 中的 SHA256 只适用于发布产物，
+; 不放入安装目录，避免安装包自身哈希与文档不一致）
 Source: "..\docs\windows-desktop.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 Source: "..\VERSION"; DestDir: "{app}"; Flags: ignoreversion
 

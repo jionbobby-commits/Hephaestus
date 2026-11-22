@@ -1,4 +1,4 @@
-"""Hephaestus V1.2.1 Windows 桌面端测试。
+"""Hephaestus V1.3.0 Windows 桌面端测试。
 
 覆盖范围：
 - 桌面入口可导入、参数解析；
@@ -121,7 +121,7 @@ def test_desktop_entry_importable() -> None:
 
     assert callable(entry.main)
     assert entry.__version__ == __version__
-    assert __version__ == "1.2.1"
+    assert __version__ == "1.3.0"
 
 
 def test_parse_args_headless_flags() -> None:
@@ -497,7 +497,7 @@ def test_run_window_wires_health_endpoint_and_stop_event(
     assert watch_kwargs["stop_event"].is_set()
     assert captured["backend"].stopped is True
     assert created["title"] == "Hephaestus"
-    assert created["url"] == "http://127.0.0.1:54321"
+    assert created["url"] == "http://127.0.0.1:54321?desktop=1"
 
 
 def test_check_runtime_cli_writes_report(tmp_path: Path) -> None:

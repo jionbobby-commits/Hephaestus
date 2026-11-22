@@ -2,10 +2,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.database import create_db
+from app.release import VERSION, release_info
 from app.routers import notes, state
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -18,7 +19,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="Hephaestus", version="0.4.0", lifespan=lifespan)
+app = FastAPI(title="Hephaestus", version=VERSION, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(notes.router)
 app.include_router(state.router)
@@ -32,6 +33,16 @@ def read_root():
 @app.get("/health", tags=["系统"])
 def health():
     return {"status": "ok"}
+
+
+@app.get("/api/release", tags=["系统"])
+def release():
+    return release_info()
+
+
+@app.get("/download/windows", include_in_schema=False)
+def download_windows():
+    return RedirectResponse(release_info()["download_url"], status_code=307)
 
 
 if __name__ == "__main__":

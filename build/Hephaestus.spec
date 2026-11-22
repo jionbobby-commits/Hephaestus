@@ -1,9 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""Hephaestus V1.2.1 Windows 桌面端 PyInstaller 配置。
+"""Hephaestus V1.3.0 Windows 桌面端 PyInstaller 配置。
 
 用法：
     python -m PyInstaller --noconfirm --clean build/Hephaestus.spec          # onedir
-    ￥env:HEPHAESTUS_ONEFILE=1; python -m PyInstaller --noconfirm --clean build/Hephaestus.spec   # onefile
+    $env:HEPHAESTUS_ONEFILE=1; python -m PyInstaller --noconfirm --clean build/Hephaestus.spec   # onefile
 
 产物：
     onedir  -> dist/Hephaestus/Hephaestus.exe
