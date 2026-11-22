@@ -1,3 +1,3 @@
-"""Hephaestus Windows 桌面端（V1.1）."""
+"""Hephaestus Windows 桌面端（V1.2）."""
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"

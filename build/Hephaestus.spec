@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""Hephaestus V1.1 Windows 桌面端 PyInstaller 配置。
+"""Hephaestus V1.2 Windows 桌面端 PyInstaller 配置。
 
 用法：
     python -m PyInstaller --noconfirm --clean build/Hephaestus.spec          # onedir
@@ -68,6 +68,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=str(ICON) if ICON.is_file() else None,
+    version=str(ROOT / "build" / "version_info.txt"),
 )
 
 if not ONE_FILE:

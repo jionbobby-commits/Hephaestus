@@ -11,7 +11,7 @@
 - SQLite + SQLAlchemy 持久化
 - 前端完整状态（笔记、标签和界面设置）持久化
 - Pydantic 参数验证、pytest 自动化测试与 GitHub Actions
-- Windows 桌面版（V1.1）：pywebview + WebView2 独立窗口，无需浏览器，数据保存在本机
+- Windows 桌面版（V1.2）：pywebview + WebView2 独立窗口，无需浏览器，数据保存在本机；含安装程序、WebView2 检测和正式图标
 
 ## 环境与启动
 
@@ -32,7 +32,7 @@ python -m uvicorn app.main:app --reload
 
 首次启动自动创建 `data/hephaestus.db`。可通过环境变量 `HEPHAESTUS_DATABASE_URL` 修改数据库连接地址。
 
-## Windows 桌面版（V1.1）
+## Windows 桌面版（V1.2）
 
 桌面版把原有前端和 FastAPI 后端封装成一个独立窗口，完全本地运行，不依赖浏览器：
 
@@ -40,7 +40,9 @@ python -m uvicorn app.main:app --reload
 .venv\Scripts\python.exe -m desktop.main
 ```
 
-打包与分发使用 `build/Hephaestus.spec`（onedir 或 onefile）。用户数据默认保存在 `%LOCALAPPDATA%\Hephaestus`，可用 `--data-dir` 或 `HEPHAESTUS_DATA_DIR` 覆盖。详细运行、数据目录、旧库导入和故障排查见 [docs/windows-desktop.md](docs/windows-desktop.md)。
+V1.2 提供 Inno Setup 安装程序（按用户安装、开始菜单快捷方式、可选桌面快捷方式、覆盖升级、卸载保留用户数据）、便携版 ZIP 和单文件 EXE。启动前会检测 WebView2 Runtime，缺失时显示中文提示和微软官方下载地址。
+
+打包使用 `build/Hephaestus.spec`（onedir 或 onefile），安装包脚本为 `installer/Hephaestus.iss`。用户数据默认保存在 `%LOCALAPPDATA%\Hephaestus`，可用 `--data-dir` 或 `HEPHAESTUS_DATA_DIR` 覆盖。安装、升级、卸载、备份和故障排查见 [docs/windows-desktop.md](docs/windows-desktop.md)，版本变更见 [docs/release-notes-1.2.0.md](docs/release-notes-1.2.0.md)。
 
 ## API 接口
 
@@ -65,7 +67,7 @@ python -m uvicorn app.main:app --reload
 python -m pytest -q
 ```
 
-GitHub Actions 会在推送和 Pull Request 时自动运行测试。
+安装包测试会静默安装到临时目录，需要先构建 `dist/Hephaestus` 和 `dist/installer/Hephaestus-Setup-1.2.0.exe`；缺少产物时自动跳过。GitHub Actions 会在推送和 Pull Request 时自动运行测试。
 
 ## 项目结构
 
@@ -81,16 +83,26 @@ desktop/
   main.py           # 桌面端入口：启动后端、打开窗口、关闭时保存
   server.py         # 本地 FastAPI 服务生命周期与健康检查
   paths.py          # 用户数据目录与数据库路径
+  runtime.py        # WebView2 Runtime 检测与中文提示
   legacy.py         # 旧数据库校验、备份与导入
   single_instance.py# 单实例互斥量
   dialogs.py        # 原生错误提示框
+  assets/           # 正式应用图标（ICO/PNG）
 build/
   Hephaestus.spec   # PyInstaller 打包配置（onedir / onefile）
+  version_info.txt  # EXE 版本信息
+installer/
+  Hephaestus.iss    # Inno Setup 安装脚本
+  ChineseSimplified.isl # 简体中文安装界面
+tools/
+  make_icon.py      # 生成应用图标
 docs/
-  windows-desktop.md# 桌面版运行、数据目录与故障排查
+  windows-desktop.md# 桌面版安装、数据目录与故障排查
+  release-notes-1.2.0.md # V1.2 发布说明
 tests/
   test_api.py       # API 自动化测试
   test_desktop.py   # 桌面端自动化测试
+  test_installer.py # 安装、升级、卸载集成测试
 ```
 
 ## 数据与安全

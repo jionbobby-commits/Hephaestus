@@ -1,4 +1,4 @@
-"""Hephaestus V1.1 Windows 桌面端测试。
+"""Hephaestus V1.2 Windows 桌面端测试。
 
 覆盖范围：
 - 桌面入口可导入、参数解析；
@@ -7,7 +7,8 @@
 - 单实例互斥；
 - 端口选择与健康检查轮询；
 - 旧数据库安全导入（备份、校验、失败不破坏源文件）；
-- 真实 headless 启动：健康检查、/api/state、笔记持久化、端口冲突回退。
+- 真实 headless 启动：健康检查、/api/state、笔记持久化、端口冲突回退；
+- WebView2 Runtime 检测、缺失提示与 --check-runtime 报告。
 """
 
 from __future__ import annotations
@@ -117,8 +118,8 @@ def test_desktop_entry_importable() -> None:
     import desktop.main as entry
 
     assert callable(entry.main)
-    assert entry.__version__ == "1.1.0"
-    assert __version__ == "1.1.0"
+    assert entry.__version__ == __version__
+    assert __version__ == "1.2.0"
 
 
 def test_parse_args_headless_flags() -> None:
@@ -341,4 +342,66 @@ def test_self_test_reports_health_and_database(tmp_path: Path) -> None:
     assert report["health"] is True
     assert report["frozen"] is False
     assert report["webview"] == "6.2.1"
+    assert "webview2" in report
     assert Path(report["db"]).is_file()
+
+
+def test_webview2_missing_message_has_official_url() -> None:
+    from desktop.runtime import WEBVIEW2_DOWNLOAD_URL, webview2_missing_message
+
+    message = webview2_missing_message()
+    assert "WebView2" in message
+    assert WEBVIEW2_DOWNLOAD_URL in message
+    assert "Python" in message
+
+
+def test_require_webview2_raises_when_missing() -> None:
+    from desktop.runtime import WebView2MissingError, require_webview2
+
+    with pytest.raises(WebView2MissingError):
+        require_webview2(version_getter=lambda: None)
+    assert require_webview2(version_getter=lambda: "152.0.0.0") == "152.0.0.0"
+
+
+def test_run_window_reports_missing_webview2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from desktop import main as desktop_main
+    from desktop.runtime import WebView2MissingError
+
+    calls: list[bool] = []
+
+    def missing() -> str:
+        raise WebView2MissingError("missing")
+
+    monkeypatch.setattr(desktop_main, "require_webview2", missing)
+    monkeypatch.setattr(desktop_main, "show_webview2_missing_dialog", lambda: calls.append(True))
+    args = desktop_main.parse_args(["--data-dir", str(tmp_path / "missing-runtime")])
+    assert desktop_main.run_window(args) == 2
+    assert calls == [True]
+
+
+def test_check_runtime_cli_writes_report(tmp_path: Path) -> None:
+    report_path = tmp_path / "runtime.json"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "desktop.main",
+            "--check-runtime",
+            str(report_path),
+        ],
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+    )
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["version"] == __version__
+    assert "webview2" in report
+    assert report["download_url"].startswith("https://developer.microsoft.com/")
+    assert completed.returncode == (0 if report["webview2"] else 3)
+
+
+def test_version_file_matches_package() -> None:
+    assert (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip() == __version__
+

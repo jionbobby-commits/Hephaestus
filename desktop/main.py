@@ -1,12 +1,13 @@
-"""Hephaestus V1.1 Windows 桌面端入口。
+"""Hephaestus V1.2 Windows 桌面端入口。
 
 启动流程：
-1. 准备用户数据目录（%LOCALAPPDATA%\\Hephaestus）并设置数据库环境变量；
-2. 单实例互斥量检查，避免重复启动多个后端；
-3. 在后台线程启动 FastAPI（仅 127.0.0.1，随机可用端口）；
-4. 轮询 /health 直到就绪（超时则提示错误）；
-5. 使用 pywebview 打开独立窗口加载原有前端页面；
-6. 关闭窗口时先留出前端状态写入时间，再优雅停止本地服务。
+1. 检测 Microsoft WebView2 Runtime，缺失时给出中文安装指引并退出；
+2. 准备用户数据目录（%LOCALAPPDATA%\\Hephaestus）并设置数据库环境变量；
+3. 单实例互斥量检查，避免重复启动多个后端；
+4. 在后台线程启动 FastAPI（仅 127.0.0.1，随机可用端口）；
+5. 轮询 /health 直到就绪（超时则提示错误）；
+6. 使用 pywebview 打开独立窗口加载原有前端页面；
+7. 关闭窗口时先留出前端状态写入时间，再优雅停止本地服务。
 """
 
 from __future__ import annotations
@@ -29,6 +30,13 @@ from desktop.paths import AppPaths, resolve_paths
 from desktop.server import BackendServer, BackendStartError, watch_backend
 from desktop.single_instance import SingleInstance
 from desktop import server as server_module
+from desktop.runtime import (
+    WEBVIEW2_DOWNLOAD_URL,
+    WebView2MissingError,
+    read_webview2_version,
+    require_webview2,
+    show_webview2_missing_dialog,
+)
 
 LOGGER = logging.getLogger("hephaestus.desktop")
 
@@ -109,9 +117,35 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--import-db", type=Path, default=None, help="启动前把指定 SQLite 数据库复制到用户数据目录")
     parser.add_argument("--startup-timeout", type=float, default=25.0, help="等待健康检查的超时秒数")
     parser.add_argument("--headless", action="store_true", help="仅启动本地后端，不打开窗口（自动化测试/排查用）")
+    parser.add_argument(
+        "--check-runtime",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="REPORT",
+        help="检查 WebView2 Runtime 并输出 JSON；可把报告写入指定文件（不启动窗口）",
+    )
     parser.add_argument("--self-test", type=Path, default=None, metavar="REPORT", help="启动后端并自检，把 JSON 报告写入指定文件后退出（打包验证用）")
     parser.add_argument("--version", action="store_true", help="输出版本号后退出")
     return parser.parse_args(argv)
+
+
+def run_check_runtime(report_path: str | None = None) -> int:
+    """输出 WebView2 Runtime 检测结果，供安装程序和故障排查使用。"""
+    version = read_webview2_version()
+    payload = {
+        "ok": bool(version),
+        "version": __version__,
+        "frozen": bool(getattr(sys, "frozen", False)),
+        "webview2": version,
+        "download_url": WEBVIEW2_DOWNLOAD_URL,
+    }
+    if report_path:
+        target = Path(report_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    emit_json(payload)
+    return 0 if version else 3
 
 
 def run_headless(args: argparse.Namespace) -> int:
@@ -152,6 +186,7 @@ def run_self_test(args: argparse.Namespace) -> int:
         "url": None,
         "health": False,
         "webview": None,
+        "webview2": read_webview2_version(),
         "error": None,
     }
     backend = BackendServer(port=args.port, startup_timeout=args.startup_timeout)
@@ -176,10 +211,18 @@ def run_self_test(args: argparse.Namespace) -> int:
 
 
 def run_window(args: argparse.Namespace) -> int:
-    import webview  # 仅窗口模式需要，便于在无 GUI 环境导入本模块
-
     paths = resolve_paths(args.data_dir)
     setup_logging(paths.log_file)
+    try:
+        webview2_version = require_webview2()
+    except WebView2MissingError:
+        LOGGER.error("未检测到 Microsoft WebView2 Runtime，无法打开窗口")
+        show_webview2_missing_dialog()
+        return 2
+    LOGGER.info("WebView2 Runtime 版本: %s", webview2_version)
+
+    import webview  # 仅在窗口模式导入；此时已确认运行时可用的概率最高
+
     guard = SingleInstance()
     if not guard.acquire():
         LOGGER.info("检测到已有实例，放弃重复启动")
@@ -278,6 +321,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.version:
         print(f"Hephaestus {__version__}")
         return 0
+    if args.check_runtime is not None:
+        return run_check_runtime(args.check_runtime or None)
     if args.self_test is not None:
         return run_self_test(args)
     if args.headless:
