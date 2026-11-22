@@ -1,4 +1,4 @@
-"""Hephaestus V1.2 Windows 桌面端入口。
+"""Hephaestus V1.2.1 Windows 桌面端入口。
 
 启动流程：
 1. 检测 Microsoft WebView2 Runtime，缺失时给出中文安装指引并退出；
@@ -27,7 +27,7 @@ from desktop import __version__
 from desktop.dialogs import show_error, show_info
 from desktop.legacy import LegacyImportError, auto_import_legacy, import_database
 from desktop.paths import AppPaths, resolve_paths
-from desktop.server import BackendServer, BackendStartError, watch_backend
+from desktop.server import BackendServer, BackendStartError, health_url, watch_backend
 from desktop.single_instance import SingleInstance
 from desktop import server as server_module
 from desktop.runtime import (
@@ -231,6 +231,7 @@ def run_window(args: argparse.Namespace) -> int:
 
     backend = BackendServer(port=args.port, startup_timeout=args.startup_timeout)
     window = None
+    watch_stop = threading.Event()
     try:
         prepare_environment(paths, import_db=args.import_db)
         try:
@@ -280,6 +281,8 @@ def run_window(args: argparse.Namespace) -> int:
             if closing_state["flushing"]:
                 return True
             closing_state["flushing"] = True
+            # 关闭流程开始后立即停止健康巡检，避免服务正在优雅退出时误弹“后端异常”。
+            watch_stop.set()
             LOGGER.info("收到窗口关闭事件，等待前端状态写入后停止本地服务")
             threading.Thread(
                 target=flush_state_and_close,
@@ -292,7 +295,16 @@ def run_window(args: argparse.Namespace) -> int:
 
         window.events.loaded += on_loaded
         window.events.closing += on_closing
-        watch_backend(url, lambda reason: show_error("Hephaestus 后端异常", f"{reason}\n\n日志文件：{paths.log_file}"))
+        # 明确传入 /health，并让巡检同时跟踪后端线程是否存活。
+        # startup_grace 覆盖 WebView2 首次初始化较慢的机器；即使巡检在
+        # 窗口加载前开始，也不会因初始化负载而误报。
+        watch_backend(
+            health_url(backend.host, backend.port),
+            lambda reason: show_error("Hephaestus 后端异常", f"{reason}\n\n日志文件：{paths.log_file}"),
+            backend=backend,
+            stop_event=watch_stop,
+            startup_grace=5.0,
+        )
         LOGGER.info("打开桌面窗口: %s", url)
         webview.start(debug=False, private_mode=False)
         LOGGER.info("窗口已关闭")
@@ -305,6 +317,7 @@ def run_window(args: argparse.Namespace) -> int:
         )
         return 1
     finally:
+        watch_stop.set()
         backend.stop()
         if window is not None:
             try:

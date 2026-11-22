@@ -14,13 +14,13 @@ installer/Hephaestus.iss 使用 Inno Setup 6 构建 Windows 安装包。
 2. 已安装 Inno Setup 6.5 或更高版本，默认路径：
    %LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe。
 3. VERSION、desktop/__init__.py、build/version_info.txt 和 Hephaestus.iss 中的
-   版本号一致（当前 1.2.0）。
+   版本号一致（当前 1.2.1）。
 
 ## 构建命令
 
     & "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" installer\Hephaestus.iss
 
-输出：dist\installer\Hephaestus-Setup-1.2.0.exe
+输出：dist\installer\Hephaestus-Setup-1.2.1.exe
 
 ## 设计要点
 

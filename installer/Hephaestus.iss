@@ -1,4 +1,4 @@
-﻿; Hephaestus V1.2 Windows 安装脚本（Inno Setup 6.5+）
+﻿; Hephaestus V1.2.1 Windows 安装脚本（Inno Setup 6.5+）
 ; 设计要点：
 ; 1. 默认按用户安装到 %LOCALAPPDATA%\Programs\Hephaestus，无需管理员权限；
 ; 2. 用户数据始终位于 %LOCALAPPDATA%\Hephaestus（数据库、日志、配置），与安装目录分离；
@@ -8,7 +8,7 @@
 ; 6. 禁止把程序安装到用户数据目录，避免误删风险。
 
 #define AppName "Hephaestus"
-#define AppVersion "1.2.0"
+#define AppVersion "1.2.1"
 #define AppPublisher "Hephaestus"
 #define AppExeName "Hephaestus.exe"
 #define AppGuid "{{7C4E2B1A-9F3D-4A6E-8B52-1D9C0E7A3F64}"
@@ -41,11 +41,11 @@ WizardStyle=modern
 CloseApplications=yes
 RestartApplications=no
 AppMutex=Hephaestus-Desktop-V1.1
-VersionInfoVersion=1.2.0
+VersionInfoVersion=1.2.1
 VersionInfoCompany={#AppPublisher}
 VersionInfoDescription=Hephaestus {#AppVersion} 安装程序
 VersionInfoProductName={#AppName}
-VersionInfoProductVersion=1.2.0
+VersionInfoProductVersion=1.2.1
 VersionInfoOriginalFileName=Hephaestus-Setup-{#AppVersion}.exe
 
 [Languages]

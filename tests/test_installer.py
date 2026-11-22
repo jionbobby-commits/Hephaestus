@@ -1,4 +1,4 @@
-"""Hephaestus V1.2 安装包集成测试。
+"""Hephaestus V1.2.1 安装包集成测试。
 
 这些测试直接驱动 Inno Setup 生成的安装程序，覆盖：
 - 首次静默安装、开始菜单快捷方式、程序文件完整性；
@@ -8,7 +8,7 @@
 - 重装后能读取旧数据。
 
 运行前提：已构建 dist/Hephaestus（onedir）与
-dist/installer/Hephaestus-Setup-1.2.0.exe。缺少产物时整体跳过，
+dist/installer/Hephaestus-Setup-1.2.1.exe。缺少产物时整体跳过，
 以便 CI 在没有 Windows 构建产物的环境下仍能运行其余测试。
 """
 
@@ -31,7 +31,7 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ONEDIR_EXE = PROJECT_ROOT / "dist" / "Hephaestus" / "Hephaestus.exe"
-INSTALLER = PROJECT_ROOT / "dist" / "installer" / "Hephaestus-Setup-1.2.0.exe"
+INSTALLER = PROJECT_ROOT / "dist" / "installer" / "Hephaestus-Setup-1.2.1.exe"
 REAL_DB = Path(os.environ.get("LOCALAPPDATA", "")) / "Hephaestus" / "hephaestus.db"
 START_MENU_DIR = (
     Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
@@ -39,7 +39,7 @@ START_MENU_DIR = (
 
 pytestmark = pytest.mark.skipif(
     not INSTALLER.is_file() or not ONEDIR_EXE.is_file(),
-    reason="需要先构建 dist/Hephaestus 与 dist/installer/Hephaestus-Setup-1.2.0.exe",
+    reason="需要先构建 dist/Hephaestus 与 dist/installer/Hephaestus-Setup-1.2.1.exe",
 )
 
 
@@ -149,7 +149,7 @@ def test_first_install_launch_and_shortcut(tmp_path: Path) -> None:
     assert (target / "Hephaestus.exe").is_file()
     assert (target / "_internal" / "static" / "index.html").is_file()
     assert (target / "README.md").is_file()
-    assert (target / "VERSION").read_text(encoding="utf-8").strip() == "1.2.0"
+    assert (target / "VERSION").read_text(encoding="utf-8").strip() == "1.2.1"
 
     shortcuts = list(START_MENU_DIR.rglob("Hephaestus.lnk"))
     assert shortcuts, "首次安装后没有创建开始菜单快捷方式"

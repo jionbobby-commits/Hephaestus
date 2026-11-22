@@ -1,4 +1,4 @@
-"""Hephaestus V1.2 Windows 桌面端测试。
+"""Hephaestus V1.2.1 Windows 桌面端测试。
 
 覆盖范围：
 - 桌面入口可导入、参数解析；
@@ -8,7 +8,8 @@
 - 端口选择与健康检查轮询；
 - 旧数据库安全导入（备份、校验、失败不破坏源文件）；
 - 真实 headless 启动：健康检查、/api/state、笔记持久化、端口冲突回退；
-- WebView2 Runtime 检测、缺失提示与 --check-runtime 报告。
+- WebView2 Runtime 检测、缺失提示与 --check-runtime 报告；
+- 连续启动/关闭、窗口巡检接线与健康检查回归。
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -119,7 +121,7 @@ def test_desktop_entry_importable() -> None:
 
     assert callable(entry.main)
     assert entry.__version__ == __version__
-    assert __version__ == "1.2.0"
+    assert __version__ == "1.2.1"
 
 
 def test_parse_args_headless_flags() -> None:
@@ -300,6 +302,30 @@ def test_headless_notes_persist_across_restart(tmp_path: Path) -> None:
         assert _stop_headless(proc2) == 0
 
 
+def test_headless_repeated_start_stop(tmp_path: Path) -> None:
+    """连续启动/关闭三次：每次健康检查正常，SQLite 数据不丢失。"""
+    data_dir = tmp_path / "desk"
+    note_id: int | None = None
+    for cycle in range(3):
+        proc, info = _launch_headless(data_dir)
+        try:
+            assert info["ok"] is True, info
+            with httpx.Client(base_url=info["url"], timeout=10) as client:
+                assert client.get("/health").json() == {"status": "ok"}
+                if cycle == 0:
+                    created = client.post("/notes", json={"title": f"循环-{cycle}", "content": "重启仍在"})
+                    assert created.status_code == 201, created.text
+                    note_id = int(created.json()["id"])
+                else:
+                    assert note_id is not None
+                    note = client.get(f"/notes/{note_id}")
+                    assert note.status_code == 200
+                    assert note.json()["title"] == "循环-0"
+        finally:
+            assert _stop_headless(proc) == 0, f"第 {cycle + 1} 次关闭失败"
+    assert (data_dir / "hephaestus.db").is_file()
+
+
 def test_headless_port_conflict_falls_back(tmp_path: Path) -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as blocker:
         blocker.bind(("127.0.0.1", 0))
@@ -377,6 +403,101 @@ def test_run_window_reports_missing_webview2(tmp_path: Path, monkeypatch: pytest
     args = desktop_main.parse_args(["--data-dir", str(tmp_path / "missing-runtime")])
     assert desktop_main.run_window(args) == 2
     assert calls == [True]
+
+
+def test_run_window_wires_health_endpoint_and_stop_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """窗口启动必须把 /health 和停止事件交给巡检，避免根地址 HTML 误报。"""
+    import types
+
+    from desktop import main as desktop_main
+
+    class Signal:
+        def __init__(self) -> None:
+            self.handlers = []
+
+        def __iadd__(self, handler):
+            self.handlers.append(handler)
+            return self
+
+    class FakeWindow:
+        def __init__(self) -> None:
+            self.events = types.SimpleNamespace(loaded=Signal(), closing=Signal())
+            self.destroyed = False
+
+        def evaluate_js(self, _script: str) -> str:
+            return "Hephaestus 记事本"
+
+        def destroy(self) -> None:
+            self.destroyed = True
+
+    fake_window = FakeWindow()
+    created: dict[str, object] = {}
+
+    class FakeWebview(types.ModuleType):
+        def __init__(self) -> None:
+            super().__init__("webview")
+
+        def create_window(self, title: str, url: str, **kwargs: object) -> FakeWindow:
+            created.update(title=title, url=url, kwargs=kwargs, window=fake_window)
+            return fake_window
+
+        def start(self, **_kwargs: object) -> None:
+            for handler in list(fake_window.events.loaded.handlers):
+                handler()
+
+    class FakeGuard:
+        released = False
+
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            FakeGuard.released = True
+
+    captured: dict[str, object] = {}
+
+    class FakeBackend:
+        def __init__(self, port: int | None = None, startup_timeout: float = 25.0) -> None:
+            self.host = "127.0.0.1"
+            self.port = 54321
+            self.stopped = False
+            captured["backend"] = self
+
+        def start(self) -> str:
+            return "http://127.0.0.1:54321"
+
+        def stop(self) -> None:
+            self.stopped = True
+
+    def fake_watch(url: str, on_failure, **kwargs: object) -> None:
+        captured.update(url=url, on_failure=on_failure, watch_kwargs=kwargs)
+
+    monkeypatch.setattr(desktop_main, "require_webview2", lambda: "152.0.4191.66")
+    monkeypatch.setattr(desktop_main, "SingleInstance", FakeGuard)
+    monkeypatch.setattr(desktop_main, "BackendServer", FakeBackend)
+    monkeypatch.setattr(desktop_main, "prepare_environment", lambda *_a, **_k: None)
+    monkeypatch.setattr(desktop_main, "watch_backend", fake_watch)
+    monkeypatch.setattr(
+        desktop_main,
+        "show_error",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("不应弹出后端异常")),
+    )
+    monkeypatch.setitem(sys.modules, "webview", FakeWebview())
+
+    args = desktop_main.parse_args(["--data-dir", str(tmp_path / "wired")])
+    assert desktop_main.run_window(args) == 0
+    assert captured["url"] == "http://127.0.0.1:54321/health"
+    watch_kwargs = captured["watch_kwargs"]
+    assert isinstance(watch_kwargs, dict)
+    assert watch_kwargs["backend"] is captured["backend"]
+    assert watch_kwargs["startup_grace"] == 5.0
+    assert isinstance(watch_kwargs["stop_event"], threading.Event)
+    assert watch_kwargs["stop_event"].is_set()
+    assert captured["backend"].stopped is True
+    assert created["title"] == "Hephaestus"
+    assert created["url"] == "http://127.0.0.1:54321"
 
 
 def test_check_runtime_cli_writes_report(tmp_path: Path) -> None:

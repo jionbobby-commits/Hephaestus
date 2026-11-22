@@ -6,7 +6,7 @@
 WebView2 Runtime 的 Windows 11 家用版，无法代表最终用户环境；本机也未安装
 Hyper-V 管理工具、VirtualBox、VMware 或 Windows Sandbox，因此没有伪造“通过”结果。
 
-已完成的本机验证见 docs/release-notes-1.2.0.md：pytest 38 passed、安装包集成测试
+已完成的本机验证见 docs/release-notes-1.2.1.md：pytest 55 passed、安装包集成测试
 2 passed、onedir/onefile 检查与自检通过。
 
 ## 目标环境
@@ -22,13 +22,13 @@ Hyper-V 管理工具、VirtualBox、VMware 或 Windows Sandbox，因此没有伪
 
 1. 在宿主机核对发布文件 SHA256，与 dist/SHA256SUMS.txt 一致。
 2. 把以下文件复制到虚拟机：
-   - Hephaestus-Setup-1.2.0.exe
-   - Hephaestus-Portable-1.2.0.zip
-   - Hephaestus-1.2.0-onefile.exe
+   - Hephaestus-Setup-1.2.1.exe
+   - Hephaestus-Portable-1.2.1.zip
+   - Hephaestus-1.2.1-onefile.exe
    - SHA256SUMS.txt
 3. 在虚拟机中用 PowerShell 复核：
 
-       Get-FileHash .\Hephaestus-Setup-1.2.0.exe -Algorithm SHA256
+       Get-FileHash .\Hephaestus-Setup-1.2.1.exe -Algorithm SHA256
 
 4. 确认系统没有 Python：
 
@@ -60,7 +60,7 @@ Hyper-V 管理工具、VirtualBox、VMware 或 Windows Sandbox，因此没有伪
 | VM-14 | 桌面快捷方式 | 安装时勾选“创建桌面快捷方式” | 桌面出现快捷方式并可启动 | 待执行 |
 | VM-15 | 数据目录保护 | 安装时把目录改为 %LOCALAPPDATA%\Hephaestus | 安装程序拒绝并给出中文提示 | 待执行 |
 | VM-16 | 便携版 | 解压 ZIP，运行 Hephaestus\Hephaestus.exe | 无需安装即可启动，数据写入默认数据目录 | 待执行 |
-| VM-17 | 单文件版 | 运行 Hephaestus-1.2.0-onefile.exe | 启动成功；首次启动稍慢；数据持久化 | 待执行 |
+| VM-17 | 单文件版 | 运行 Hephaestus-1.2.1-onefile.exe | 启动成功；首次启动稍慢；数据持久化 | 待执行 |
 | VM-18 | 移动程序 | 把便携版目录移到其他路径后启动 | 程序可启动，数据目录不变 | 待执行 |
 | VM-19 | WebView2 存在 | 在含 WebView2 的系统启动 | 正常打开窗口，无错误提示 | 待执行 |
 | VM-20 | WebView2 缺失 | 在无 WebView2 的系统启动 | 中文提示、官方下载链接、退出码 2，不崩溃 | 待执行 |
@@ -79,7 +79,7 @@ Hyper-V 管理工具、VirtualBox、VMware 或 Windows Sandbox，因此没有伪
     & "$env:LOCALAPPDATA\Programs\Hephaestus\Hephaestus.exe" --check-runtime runtime.json
     & "$env:LOCALAPPDATA\Programs\Hephaestus\Hephaestus.exe" --self-test selftest.json --data-dir "$env:TEMP\heph-vm-data"
 
-预期：版本输出 Hephaestus 1.2.0；--check-runtime 输出 JSON 并在有 WebView2 时返回 0；
+预期：版本输出 Hephaestus 1.2.1；--check-runtime 输出 JSON 并在有 WebView2 时返回 0；
 --self-test 报告 ok、health、frozen 为 true。把 JSON 文件和截图一并归档。
 
 ## 验收标准
