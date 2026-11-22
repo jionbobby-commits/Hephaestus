@@ -182,3 +182,8 @@ cython_debug/
 # Hephaestus local database and test artifacts
 data/
 .pytest_cache/
+
+# V1.1 桌面端：保留 PyInstaller 打包配置，忽略构建产物
+!build/
+build/*
+!build/Hephaestus.spec

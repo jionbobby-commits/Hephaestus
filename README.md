@@ -11,6 +11,7 @@
 - SQLite + SQLAlchemy 持久化
 - 前端完整状态（笔记、标签和界面设置）持久化
 - Pydantic 参数验证、pytest 自动化测试与 GitHub Actions
+- Windows 桌面版（V1.1）：pywebview + WebView2 独立窗口，无需浏览器，数据保存在本机
 
 ## 环境与启动
 
@@ -30,6 +31,16 @@ python -m uvicorn app.main:app --reload
 打开 http://127.0.0.1:8000 ，Swagger 接口文档位于 http://127.0.0.1:8000/docs。
 
 首次启动自动创建 `data/hephaestus.db`。可通过环境变量 `HEPHAESTUS_DATABASE_URL` 修改数据库连接地址。
+
+## Windows 桌面版（V1.1）
+
+桌面版把原有前端和 FastAPI 后端封装成一个独立窗口，完全本地运行，不依赖浏览器：
+
+```powershell
+.venv\Scripts\python.exe -m desktop.main
+```
+
+打包与分发使用 `build/Hephaestus.spec`（onedir 或 onefile）。用户数据默认保存在 `%LOCALAPPDATA%\Hephaestus`，可用 `--data-dir` 或 `HEPHAESTUS_DATA_DIR` 覆盖。详细运行、数据目录、旧库导入和故障排查见 [docs/windows-desktop.md](docs/windows-desktop.md)。
 
 ## API 接口
 
@@ -66,8 +77,20 @@ app/
   routers/          # HTTP 路由层
   services/         # 业务逻辑层
   main.py           # 应用入口与生命周期
+desktop/
+  main.py           # 桌面端入口：启动后端、打开窗口、关闭时保存
+  server.py         # 本地 FastAPI 服务生命周期与健康检查
+  paths.py          # 用户数据目录与数据库路径
+  legacy.py         # 旧数据库校验、备份与导入
+  single_instance.py# 单实例互斥量
+  dialogs.py        # 原生错误提示框
+build/
+  Hephaestus.spec   # PyInstaller 打包配置（onedir / onefile）
+docs/
+  windows-desktop.md# 桌面版运行、数据目录与故障排查
 tests/
   test_api.py       # API 自动化测试
+  test_desktop.py   # 桌面端自动化测试
 ```
 
 ## 数据与安全

@@ -312,3 +312,33 @@ def test_headless_port_conflict_falls_back(tmp_path: Path) -> None:
                 assert client.get("/health").json() == {"status": "ok"}
         finally:
             assert _stop_headless(proc) == 0
+
+
+def test_self_test_reports_health_and_database(tmp_path: Path) -> None:
+    report_path = tmp_path / "report.json"
+    env = {key: value for key, value in os.environ.items() if key != "HEPHAESTUS_DATABASE_URL"}
+    command = [
+        sys.executable,
+        "-m",
+        "desktop.main",
+        "--self-test",
+        str(report_path),
+        "--data-dir",
+        str(tmp_path / "desk"),
+    ]
+    completed = subprocess.run(
+        command,
+        cwd=str(PROJECT_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=120,
+    )
+    assert completed.returncode == 0, completed.stderr
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["ok"] is True
+    assert report["health"] is True
+    assert report["frozen"] is False
+    assert report["webview"] == "6.2.1"
+    assert Path(report["db"]).is_file()

@@ -36,26 +36,33 @@ def is_sqlite_file(path: Path) -> bool:
 
 def count_notes(path: Path) -> int:
     """读取旧库的笔记数量；结构不符时返回 0。"""
+    connection = None
     try:
-        with sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True) as connection:
-            tables = {row[0] for row in connection.execute("select name from sqlite_master where type='table'")}
-            if "notes" not in tables:
-                return 0
-            return int(connection.execute("select count(*) from notes").fetchone()[0])
+        connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+        tables = {row[0] for row in connection.execute("select name from sqlite_master where type='table'")}
+        if "notes" not in tables:
+            return 0
+        return int(connection.execute("select count(*) from notes").fetchone()[0])
     except sqlite3.Error:
         return 0
+    finally:
+        if connection is not None:
+            connection.close()
 
 
 def _validate_database(path: Path) -> None:
     if not is_sqlite_file(path):
         raise LegacyImportError("文件不是有效的 SQLite 数据库")
-    with sqlite3.connect(path) as connection:
+    connection = sqlite3.connect(path)
+    try:
         integrity = connection.execute("PRAGMA integrity_check").fetchone()
         if not integrity or integrity[0] != "ok":
             raise LegacyImportError(f"数据库完整性校验失败: {integrity!r}")
         tables = {row[0] for row in connection.execute("select name from sqlite_master where type='table'")}
         if "notes" not in tables:
             raise LegacyImportError("数据库缺少 notes 表，可能不是 Hephaestus 数据库")
+    finally:
+        connection.close()  # Windows 下必须先释放句柄，否则 os.replace 会失败
 
 
 def import_database(source: Path, paths: AppPaths) -> Path:

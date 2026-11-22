@@ -33,6 +33,23 @@ from desktop import server as server_module
 LOGGER = logging.getLogger("hephaestus.desktop")
 
 
+def emit_line(text: str) -> None:
+    """向标准输出写一行；窗口模式（console=False）下 stdout 为 None 时退回日志。"""
+    stream = sys.stdout if sys.stdout is not None else getattr(sys, "__stdout__", None)
+    if stream is not None:
+        try:
+            stream.write(text + "\n")
+            stream.flush()
+            return
+        except (OSError, ValueError):
+            pass
+    LOGGER.info(text)
+
+
+def emit_json(payload: dict) -> None:
+    emit_line(json.dumps(payload, ensure_ascii=False))
+
+
 def setup_logging(log_file: Path) -> None:
     """只配置桌面端相关 logger，不影响宿主（例如 pytest）的日志配置。"""
     log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -87,11 +104,12 @@ def prepare_environment(
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="Hephaestus", description="Hephaestus 本地笔记桌面版")
-    parser.add_argument("--data-dir", type=Path, default=None, help="覆盖用户数据目录（默认 %LOCALAPPDATA%\\Hephaestus）")
+    parser.add_argument("--data-dir", type=Path, default=None, help="覆盖用户数据目录（默认 %%LOCALAPPDATA%%\\Hephaestus）")
     parser.add_argument("--port", type=int, default=None, help="指定后端端口（默认自动选择空闲端口）")
     parser.add_argument("--import-db", type=Path, default=None, help="启动前把指定 SQLite 数据库复制到用户数据目录")
     parser.add_argument("--startup-timeout", type=float, default=25.0, help="等待健康检查的超时秒数")
     parser.add_argument("--headless", action="store_true", help="仅启动本地后端，不打开窗口（自动化测试/排查用）")
+    parser.add_argument("--self-test", type=Path, default=None, metavar="REPORT", help="启动后端并自检，把 JSON 报告写入指定文件后退出（打包验证用）")
     parser.add_argument("--version", action="store_true", help="输出版本号后退出")
     return parser.parse_args(argv)
 
@@ -106,9 +124,9 @@ def run_headless(args: argparse.Namespace) -> int:
         url = backend.start()
     except BackendStartError as exc:
         LOGGER.error("后端启动失败: %s", exc)
-        print(json.dumps({"ok": False, "error": str(exc), "db": str(paths.db_path)}, ensure_ascii=False), flush=True)
+        emit_json({"ok": False, "error": str(exc), "db": str(paths.db_path)})
         return 1
-    print(json.dumps({"ok": True, "url": url, "db": str(paths.db_path), "log": str(paths.log_file)}, ensure_ascii=False), flush=True)
+    emit_json({"ok": True, "url": url, "db": str(paths.db_path), "log": str(paths.log_file)})
     try:
         for line in sys.stdin:
             if line.strip().lower() in {"stop", "quit", "exit"}:
@@ -118,6 +136,43 @@ def run_headless(args: argparse.Namespace) -> int:
     finally:
         backend.stop()
     return 0
+
+
+def run_self_test(args: argparse.Namespace) -> int:
+    """打包后的可执行文件自检：真实启动后端、检查健康接口与数据库文件。"""
+    import importlib.metadata as metadata
+
+    paths = resolve_paths(args.data_dir)
+    setup_logging(paths.log_file)
+    report: dict[str, object] = {
+        "ok": False,
+        "frozen": bool(getattr(sys, "frozen", False)),
+        "db": str(paths.db_path),
+        "log": str(paths.log_file),
+        "url": None,
+        "health": False,
+        "webview": None,
+        "error": None,
+    }
+    backend = BackendServer(port=args.port, startup_timeout=args.startup_timeout)
+    try:
+        prepare_environment(paths, import_db=args.import_db)
+        url = backend.start()
+        report["url"] = url
+        report["health"] = server_module.check_health(server_module.health_url(backend.host, backend.port))
+        report["webview"] = metadata.version("pywebview")
+        report["ok"] = bool(report["health"]) and paths.db_path.is_file()
+    except Exception as exc:  # noqa: BLE001 - 自检需要把所有失败写入报告
+        report["error"] = f"{type(exc).__name__}: {exc}"
+        LOGGER.exception("self-test 失败")
+    finally:
+        backend.stop()
+
+    target = Path(args.self_test)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    LOGGER.info("self-test 结果: %s", report)
+    return 0 if report["ok"] else 1
 
 
 def run_window(args: argparse.Namespace) -> int:
@@ -162,15 +217,35 @@ def run_window(args: argparse.Namespace) -> int:
                 title = "?"
             LOGGER.info("桌面窗口已连接本地服务: url=%s document.title=%s", url, title)
 
-        def on_closing() -> bool:
-            LOGGER.info("收到窗口关闭事件，等待前端状态写入后停止本地服务")
+        closing_state = {"flushing": False}
+
+        def flush_state_and_close() -> None:
+            """在工作线程里触发前端 pagehide 并等待写入完成，避免阻塞 WinForms 消息循环。"""
             try:
                 window.evaluate_js("window.dispatchEvent(new Event('pagehide'))")
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception:  # noqa: BLE001 - 窗口可能已经被用户关闭
+                LOGGER.debug("关闭前触发 pagehide 失败", exc_info=True)
             # 前端 store.save() 有 350ms 防抖，这里留出足够时间让最后一次写入落到后端。
-            time.sleep(0.6)
-            return True
+            time.sleep(0.9)
+            LOGGER.info("前端状态写入等待结束，销毁窗口")
+            try:
+                window.destroy()
+            except Exception:  # noqa: BLE001 - 窗口可能已经销毁
+                LOGGER.debug("销毁窗口失败", exc_info=True)
+
+        def on_closing() -> bool:
+            if closing_state["flushing"]:
+                return True
+            closing_state["flushing"] = True
+            LOGGER.info("收到窗口关闭事件，等待前端状态写入后停止本地服务")
+            threading.Thread(
+                target=flush_state_and_close,
+                name="hephaestus-close",
+                daemon=True,
+            ).start()
+            # 先取消本次关闭，等后台线程完成状态写入后再主动销毁窗口，
+            # 否则在 WinForms 的 UI 线程里调用 evaluate_js 会与 WebView2 消息循环互相等待。
+            return False
 
         window.events.loaded += on_loaded
         window.events.closing += on_closing
@@ -203,6 +278,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.version:
         print(f"Hephaestus {__version__}")
         return 0
+    if args.self_test is not None:
+        return run_self_test(args)
     if args.headless:
         return run_headless(args)
     return run_window(args)
