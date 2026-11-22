@@ -2,22 +2,19 @@
 
 一个基于 Python、FastAPI 和 SQLite 的本地优先笔记管理系统。
 
-## 当前功能
+## 功能
 
-- 富文本笔记编辑、标签、收藏、回收站、搜索和排序
+- 富文本笔记前端、标签、收藏、回收站、搜索与排序
 - Markdown / TXT 导入与导出
 - 深色与浅色主题、列表与网格视图
-- FastAPI 笔记 REST API：创建、读取、更新、删除、分页和搜索
+- FastAPI 笔记 REST API：创建、详情、分页、关键词搜索、分类筛选、收藏筛选、局部更新和删除
 - SQLite + SQLAlchemy 持久化
-- 前端完整状态（笔记、标签和界面设置）持久化到 SQLite
-- Pydantic 请求验证与 pytest API 测试
+- 前端完整状态（笔记、标签和界面设置）持久化
+- Pydantic 参数验证、pytest 自动化测试与 GitHub Actions
 
-## 环境要求
+## 环境与启动
 
-- Python 3.10+
-- pip
-
-## 本地运行
+要求 Python 3.10+。
 
 ```bash
 python -m venv .venv
@@ -30,40 +27,49 @@ python -m pip install -r requirements.txt
 python -m uvicorn app.main:app --reload
 ```
 
-浏览器访问 http://127.0.0.1:8000 ，接口文档访问 http://127.0.0.1:8000/docs。
+打开 http://127.0.0.1:8000 ，Swagger 接口文档位于 http://127.0.0.1:8000/docs。
 
-首次启动会自动创建 `data/hephaestus.db`。数据库文件不会提交到 Git。
+首次启动自动创建 `data/hephaestus.db`。可通过环境变量 `HEPHAESTUS_DATABASE_URL` 修改数据库连接地址。
 
-## 数据库位置
+## API 接口
 
-默认使用项目目录下的 `data/hephaestus.db`。可通过环境变量 `HEPHAESTUS_DATABASE_URL` 修改，例如：
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | /health | 健康检查 |
+| POST | /notes | 创建笔记，成功返回 201 |
+| GET | /notes | 分页列表；支持 keyword、category、favorite |
+| GET | /notes/favorites | 收藏笔记列表 |
+| GET | /notes/{id} | 笔记详情，不存在返回 404 |
+| PATCH | /notes/{id} | 局部更新一个或多个字段 |
+| PATCH | /notes/{id}/favorite | 设置收藏状态，JSON: is_favorite |
+| DELETE | /notes/{id} | 删除笔记，成功返回 204 |
+| GET | /api/state | 获取前端完整状态 |
+| PUT | /api/state | 保存前端完整状态 |
 
-```bash
-# Linux / macOS
-export HEPHAESTUS_DATABASE_URL="sqlite:///./data/custom.db"
-# Windows PowerShell
-$env:HEPHAESTUS_DATABASE_URL = "sqlite:///./data/custom.db"
-```
+搜索参数 `q` 与旧版前端兼容；新调用建议使用 `keyword`。旧版 PUT /notes/{id} 暂时保留兼容，推荐新客户端使用 PATCH。
 
-## 运行测试
+## 测试
 
 ```bash
 python -m pytest -q
 ```
 
-## API 摘要
+GitHub Actions 会在推送和 Pull Request 时自动运行测试。
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | /health | 健康检查 |
-| POST | /notes | 创建笔记 |
-| GET | /notes | 分页、关键词、分类和收藏筛选 |
-| GET | /notes/{id} | 获取笔记 |
-| PUT | /notes/{id} | 更新笔记 |
-| DELETE | /notes/{id} | 删除笔记 |
-| GET | /api/state | 获取前端完整状态 |
-| PUT | /api/state | 保存前端完整状态 |
+## 项目结构
 
-## 数据与安全说明
+```text
+app/
+  database.py       # 数据库连接与 Session
+  models.py         # SQLAlchemy 数据模型
+  schemas.py        # Pydantic 请求/响应模型
+  routers/          # HTTP 路由层
+  services/         # 业务逻辑层
+  main.py           # 应用入口与生命周期
+tests/
+  test_api.py       # API 自动化测试
+```
 
-当前前端状态接口保存的是单一共享工作区，适合个人本机使用。若将服务公开部署给多人使用，必须先实现用户认证、用户隔离、访问控制和 HTTPS，不能直接把当前版本当作多用户云笔记服务。
+## 数据与安全
+
+当前前端状态 API 是单一共享工作区，适合个人本机使用。公开部署或多人使用前，必须先实现用户认证、用户数据隔离、访问控制和 HTTPS。当前版本不应直接作为多用户云笔记服务。
