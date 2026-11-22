@@ -1,36 +1,30 @@
-from datetime import datetime, timezone
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, Query, Response, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Response, status
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import func, or_, select
+from sqlalchemy.orm import Session
 
-from app.schemas import NoteCreate, NoteList, NoteRead, NoteUpdate
+from app.database import create_db, get_db
+from app.models import FrontendState, Note
+from app.schemas import FrontendStatePayload, NoteCreate, NoteList, NoteRead, NoteUpdate
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 
-app = FastAPI(title="Hephaestus", version="0.2.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    create_db()
+    yield
+
+
+app = FastAPI(title="Hephaestus", version="0.3.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
-# 第一阶段按学习手册要求使用内存存储；服务重启后数据会清空。
-notes: list[dict] = []
-next_id = 1
-
-# 兼容现有前端完整数据结构（富文本、标签、收藏、回收站和界面设置）。
-# 前端通过该接口同步整个本地优先状态；正式 REST CRUD 接口仍保留在 /notes。
-frontend_state: dict | None = None
-
-
-def now() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def find_note(note_id: int) -> dict:
-    for note in notes:
-        if note["id"] == note_id:
-            return note
-    raise HTTPException(status_code=404, detail="笔记不存在")
+DbSession = Annotated[Session, Depends(get_db)]
 
 
 @app.get("/")
@@ -44,71 +38,100 @@ def health():
 
 
 @app.post("/notes", response_model=NoteRead, status_code=status.HTTP_201_CREATED)
-def create_note(payload: NoteCreate):
-    global next_id
-    timestamp = now()
-    note = {
-        "id": next_id,
-        **payload.model_dump(),
-        "is_favorite": False,
-        "created_at": timestamp,
-        "updated_at": timestamp,
-    }
-    notes.append(note)
-    next_id += 1
+def create_note(payload: NoteCreate, db: DbSession):
+    note = Note(**payload.model_dump())
+    db.add(note)
+    db.commit()
+    db.refresh(note)
     return note
 
 
 @app.get("/notes", response_model=NoteList)
 def list_notes(
+    db: DbSession,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=100),
+    q: str | None = Query(default=None, max_length=100),
+    category: str | None = Query(default=None, max_length=30),
+    favorite: bool | None = None,
 ):
-    ordered = sorted(notes, key=lambda item: item["updated_at"], reverse=True)
-    start = (page - 1) * page_size
-    return {
-        "items": ordered[start:start + page_size],
-        "total": len(ordered),
-        "page": page,
-        "page_size": page_size,
-    }
+    filters = []
+    if q and q.strip():
+        keyword = f"%{q.strip()}%"
+        filters.append(or_(Note.title.ilike(keyword), Note.content.ilike(keyword)))
+    if category:
+        filters.append(Note.category == category)
+    if favorite is not None:
+        filters.append(Note.is_favorite.is_(favorite))
+
+    total = db.scalar(select(func.count()).select_from(Note).where(*filters)) or 0
+    statement = (
+        select(Note)
+        .where(*filters)
+        .order_by(Note.updated_at.desc(), Note.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    items = db.scalars(statement).all()
+    return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
 @app.get("/notes/{note_id}", response_model=NoteRead)
-def get_note(note_id: int):
-    return find_note(note_id)
+def get_note(note_id: int, db: DbSession):
+    note = db.get(Note, note_id)
+    if note is None:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+    return note
 
 
 @app.put("/notes/{note_id}", response_model=NoteRead)
-def update_note(note_id: int, payload: NoteUpdate):
-    note = find_note(note_id)
-    note.update(payload.model_dump())
-    note["updated_at"] = now()
+def update_note(note_id: int, payload: NoteUpdate, db: DbSession):
+    note = db.get(Note, note_id)
+    if note is None:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+    for key, value in payload.model_dump().items():
+        setattr(note, key, value)
+    db.commit()
+    db.refresh(note)
     return note
 
 
 @app.delete("/notes/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_note(note_id: int):
-    note = find_note(note_id)
-    notes.remove(note)
+def delete_note(note_id: int, db: DbSession):
+    note = db.get(Note, note_id)
+    if note is None:
+        raise HTTPException(status_code=404, detail="笔记不存在")
+    db.delete(note)
+    db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.get("/api/state")
-def get_frontend_state():
-    return {"initialized": frontend_state is not None, "state": frontend_state}
+def get_frontend_state(db: DbSession):
+    saved = db.get(FrontendState, 1)
+    return {
+        "initialized": saved is not None,
+        "state": saved.payload if saved is not None else None,
+    }
 
 
 @app.put("/api/state")
-def save_frontend_state(payload: dict):
-    global frontend_state
-    if not isinstance(payload.get("notes"), list) or not isinstance(payload.get("tags"), list):
-        raise HTTPException(status_code=422, detail="state 必须包含 notes 和 tags 数组")
-    frontend_state = payload
-    return {"saved": True, "note_count": len(frontend_state["notes"])}
+def save_frontend_state(payload: FrontendStatePayload, db: DbSession):
+    state = payload.model_dump(mode="json")
+    if len(state["notes"]) > 10000 or len(state["tags"]) > 1000:
+        raise HTTPException(status_code=413, detail="笔记或标签数量超过限制")
+
+    saved = db.get(FrontendState, 1)
+    if saved is None:
+        saved = FrontendState(id=1, payload=state)
+        db.add(saved)
+    else:
+        saved.payload = state
+    db.commit()
+    return {"saved": True, "note_count": len(state["notes"])}
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run("app.main:app", host="127.0.0.1", port=8000, reload=True)
