@@ -195,7 +195,11 @@ def run_self_test(args: argparse.Namespace) -> int:
         url = backend.start()
         report["url"] = url
         report["health"] = server_module.check_health(server_module.health_url(backend.host, backend.port))
-        report["webview"] = metadata.version("pywebview")
+        try:
+            report["webview"] = metadata.version("pywebview")
+        except metadata.PackageNotFoundError:
+            # 自检的核心是后端与数据库；Web 版/CI 环境可能没有安装桌面运行库
+            report["webview"] = None
         report["ok"] = bool(report["health"]) and paths.db_path.is_file()
     except Exception as exc:  # noqa: BLE001 - 自检需要把所有失败写入报告
         report["error"] = f"{type(exc).__name__}: {exc}"

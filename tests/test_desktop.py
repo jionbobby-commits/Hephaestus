@@ -367,9 +367,39 @@ def test_self_test_reports_health_and_database(tmp_path: Path) -> None:
     assert report["ok"] is True
     assert report["health"] is True
     assert report["frozen"] is False
-    assert report["webview"] == "6.2.1"
+    # CI 只安装 Web 依赖时没有 pywebview；自检应仍能验证后端与数据库
+    assert report["webview"] is None or report["webview"] == "6.2.1"
     assert "webview2" in report
     assert Path(report["db"]).is_file()
+
+
+def test_self_test_without_pywebview_metadata(tmp_path: Path) -> None:
+    """CI/Web 环境没有 pywebview 时，自检仍应验证后端与数据库。"""
+    report_path = tmp_path / "report.json"
+    script = "\n".join(
+        [
+            "import importlib.metadata as metadata",
+            "def missing(name):",
+            "    raise metadata.PackageNotFoundError(name)",
+            "metadata.version = missing",
+            "from desktop.main import main",
+            "raise SystemExit(main())",
+        ]
+    )
+    env = {key: value for key, value in os.environ.items() if key != "HEPHAESTUS_DATABASE_URL"}
+    completed = subprocess.run(
+        [sys.executable, "-c", script, "--self-test", str(report_path), "--data-dir", str(tmp_path / "desk")],
+        cwd=str(PROJECT_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=120,
+    )
+    assert completed.returncode == 0, completed.stderr
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["ok"] is True
+    assert report["webview"] is None
 
 
 def test_webview2_missing_message_has_official_url() -> None:
