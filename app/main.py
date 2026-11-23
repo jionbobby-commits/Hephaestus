@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from app.database import create_db
 from app.release import VERSION, release_info
 from app.routers import notes, state
+from app.v2.api import router as v2_router
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
@@ -23,6 +24,7 @@ app = FastAPI(title="Hephaestus", version=VERSION, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(notes.router)
 app.include_router(state.router)
+app.include_router(v2_router)
 
 
 @app.get("/", include_in_schema=False)
