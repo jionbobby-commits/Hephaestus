@@ -53,7 +53,6 @@ const Icons = (() => {
 })();
 const ic = Icons.svg;
 
-/* ===================== Store ===================== */
 const Store = (() => {
   const KEY = 'hephaestus.v1', QUOTA = 5 * 1024 * 1024;
   const day = 864e5;
@@ -74,54 +73,601 @@ const Store = (() => {
       ui: { theme: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light', layout: 'list', sort: 'updated' },
     };
   };
-  let data;
-  const load = () => {
-    try { data = JSON.parse(localStorage.getItem(KEY)); } catch { data = null; }
-    if (!data || !Array.isArray(data.notes)) data = seed();
-    data.ui = { theme: 'light', layout: 'list', sort: 'updated', ...data.ui };
+
+  const defaults = { theme: 'light', layout: 'list', sort: 'updated' };
+  const readCache = () => {
+    try { return normalize(JSON.parse(localStorage.getItem(KEY))); } catch { return null; }
   };
-  let remoteSaveTimer = null;
-  const save = () => {
-    try { localStorage.setItem(KEY, JSON.stringify(data)); } catch { return false; }
-    clearTimeout(remoteSaveTimer);
-    remoteSaveTimer = setTimeout(async () => {
-      try {
-        const response = await fetch('/api/state', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data),
-        });
-        if (!response.ok) throw new Error('API save failed');
-      } catch (error) {
-        console.error('Hephaestus backend sync failed:', error);
+  const normalize = raw => {
+    if (!raw || !Array.isArray(raw.notes) || !Array.isArray(raw.tags)) return null;
+    return {
+      notes: raw.notes.map(note => ({
+        ...note,
+        tags: Array.isArray(note.tags) ? [...note.tags] : [],
+        fav: Boolean(note.fav), trashed: Boolean(note.trashed),
+        created: Number(note.created) || Date.now(), updated: Number(note.updated) || Date.now(),
+      })),
+      tags: raw.tags.map(tag => ({ ...tag, name: String(tag.name || ''), color: tag.color || '#8b8f94' })),
+      ui: { ...defaults, ...(raw.ui && typeof raw.ui === 'object' ? raw.ui : {}) },
+    };
+  };
+  const data = readCache() || seed();
+  let port = null, mode = 'legacy', adapter = 'legacy', status = null, initialized = false;
+  let saving = false, dirty = false, lastError = null, conflict = null, blocked = false;
+  let legacyTimer = null, legacyRunning = false, legacyResync = false, legacyRecovery = false;
+  let reconcileRunning = false, resync = false;
+  let statusHandler = null, conflictHandler = null;
+  let idleResolvers = [];
+  let baselineNotes = new Map(), baselineTags = new Map(), baselineUi = '';
+
+  const tagName = id => (data.tags.find(tag => tag.id === id) || {}).name || String(id);
+  const canonical = note => JSON.stringify({
+    title: String((note && note.title) || '').trim() || '无标题笔记',
+    html: String((note && note.html) || ''),
+    tags: Array.isArray(note && note.tags) ? note.tags.map(tagName).sort() : [],
+    category: String((note && note.category) || ''),
+    fav: Boolean(note && note.fav), trashed: Boolean(note && note.trashed),
+  });
+  const descriptor = note => ({ serial: canonical(note), revision: Number(note.revision) || 0, fav: Boolean(note && note.fav), trashed: Boolean(note && note.trashed) });
+  const recoveryBaseline = new Map(data.notes.map(note => [note.id, canonical(note)]));
+  const uiKey = ui => JSON.stringify({ theme: ui.theme, layout: ui.layout, sort: ui.sort });
+  const resetBaseline = () => {
+    baselineNotes = new Map(data.notes.map(note => [note.id, descriptor(note)]));
+    baselineTags = new Map(data.tags.map(tag => [tag.id, { name: tag.name, color: tag.color }]));
+    baselineUi = uiKey(data.ui);
+  };
+  const modeLabel = () => mode === 'unknown' ? '服务未连接 · 本地缓存'
+    : mode === 'v2_ready' ? (blocked ? 'V2 · 服务未连接' : 'V2 数据')
+      : mode === 'migration_pending' ? '迁移待定 · 旧版兼容'
+      : mode === 'migration_failed' ? '迁移失败 · 旧版兼容' : '旧版快照';
+  const label = () => conflict ? '版本冲突，请选择保留内容'
+    : lastError ? '保存失败，内容已保存在本地'
+      : blocked ? '服务未连接，修改已保存在本地'
+        : saving ? '保存中…' : dirty ? '等待保存…' : '已保存';
+  const notify = () => {
+    if (statusHandler) statusHandler({
+      mode, modeLabel: modeLabel(), adapter, saving, dirty, error: lastError,
+      conflict, blocked, label: label(), diagnostics: port ? port.diagnostics : [],
+    });
+  };
+  const finishIdle = () => {
+    if (saving || legacyTimer || reconcileRunning || legacyRunning) return;
+    const waiters = idleResolvers; idleResolvers = [];
+    waiters.forEach(resolve => resolve());
+  };
+  const waitForIdle = () => {
+    if (!saving && !legacyTimer && !reconcileRunning && !legacyRunning) return Promise.resolve();
+    return new Promise(resolve => idleResolvers.push(resolve));
+  };
+  const cache = () => {
+    try { localStorage.setItem(KEY, JSON.stringify(data)); return true; } catch { return false; }
+  };
+
+  const JOURNAL = 'hephaestus.v2.pending';
+  const readJournal = () => {
+    try {
+      const raw = JSON.parse(localStorage.getItem(JOURNAL));
+      if (!raw || raw.version !== 1 || !Array.isArray(raw.notes) || !Array.isArray(raw.tags)) return null;
+      const base = raw.base && typeof raw.base === 'object' ? raw.base : {};
+      return { ...raw, base };
+    } catch { return null; }
+  };
+  const writeJournal = () => {
+    if (adapter !== 'v2' || !initialized) return;
+    try {
+      const base = {};
+      baselineNotes.forEach((value, id) => { base[id] = { serial: value.serial, revision: value.revision, fav: value.fav, trashed: value.trashed }; });
+      const baseTags = {};
+      baselineTags.forEach((value, id) => { baseTags[id] = { name: value.name, color: value.color }; });
+      localStorage.setItem(JOURNAL, JSON.stringify({ version: 1, savedAt: Date.now(), notes: data.notes, tags: data.tags, ui: data.ui, base, baseTags }));
+    } catch { /* localStorage full: cache() already reports the quota failure */ }
+  };
+  const saveRecoveryJournal = () => {
+    // 页面已可编辑但数据模式尚未确认（状态接口失败/超时）时，先把当前内容
+    // 写入恢复日志；下次成功初始化再合并，避免刷新时被服务器快照覆盖。
+    try {
+      const existing = readJournal();
+      const changed = data.notes.filter(note => !recoveryBaseline.has(note.id) || recoveryBaseline.get(note.id) !== canonical(note));
+      if (!changed.length && !existing) return;
+      const notesById = new Map(((existing && existing.notes) || []).map(note => [note.id, note]));
+      changed.forEach(note => notesById.set(note.id, note));
+      localStorage.setItem(JOURNAL, JSON.stringify({
+        version: 1, savedAt: Date.now(), reason: 'init_failed',
+        notes: [...notesById.values()], tags: data.tags, ui: data.ui,
+        base: (existing && existing.base) || {}, baseTags: (existing && existing.baseTags) || {},
+      }));
+    } catch { /* localStorage full: cache() already reports the quota failure */ }
+  };
+  const clearJournal = () => { try { localStorage.removeItem(JOURNAL); } catch { /* ignore */ } };
+  const mergeJournal = journal => {
+    if (!journal) return false;
+    const pending = normalize(journal);
+    if (!pending) return false;
+    const base = journal.base || {};
+    const pendingTagById = new Map(pending.tags.map(tag => [tag.id, tag]));
+    for (const note of pending.notes) {
+      note.tags = (note.tags || []).map(id => {
+        if (data.tags.some(tag => tag.id === id)) return id;
+        const name = (pendingTagById.get(id) || {}).name;
+        const match = name && data.tags.find(tag => tag.name === name);
+        return match ? match.id : id;
+      });
+    }
+    const knownPendingTagIds = new Set(pending.tags.map(tag => tag.id));
+    const pendingTagNames = new Set(pending.tags.map(tag => tag.name));
+    const mergedTags = [...data.tags];
+    for (const tag of pending.tags) {
+      let local = mergedTags.find(item => item.id === tag.id) || mergedTags.find(item => item.name === tag.name);
+      if (local) { local.name = tag.name; local.color = tag.color; }
+      else mergedTags.push({ ...tag });
+    }
+    const baseTags = journal.baseTags && typeof journal.baseTags === 'object' ? journal.baseTags : {};
+    const staleTagIds = new Set(Object.keys(baseTags).filter(id => {
+      if (knownPendingTagIds.has(id)) return false;
+      const baselineTag = baseTags[id] || {};
+      return !pendingTagNames.has(baselineTag.name);
+    }));
+    data.tags = mergedTags.filter(tag => !staleTagIds.has(tag.id));
+    const merged = [];
+    const pendingById = new Map(pending.notes.map(note => [note.id, note]));
+    let conflictFound = false;
+    for (const note of data.notes) {
+      const local = pendingById.get(note.id);
+      if (!local) {
+        if (base[note.id] && base[note.id].serial === canonical(note)) continue; // deleted locally; baseline stays so reconcile deletes it
+        merged.push(note);
+        if (base[note.id]) conflictFound = true; // both sides changed / deletion conflict
+        continue;
       }
-    }, 350);
+      const same = canonical(note) === canonical(local);
+      if (same) { pendingById.delete(note.id); merged.push(note); continue; }
+      if (!base[note.id]) {
+        // 本地缓存里有同 id 的服务器笔记，却没有可比较的基线（例如 V2 读取
+        // 失败期间的编辑），不能静默覆盖服务器，交给用户明确选择。
+        merged.push({ ...local, id: note.id, revision: note.revision });
+        pendingById.delete(note.id);
+        conflictFound = true;
+        continue;
+      }
+      if (base[note.id].serial === canonical(note)) {
+        merged.push({ ...local, id: note.id, revision: note.revision });
+      } else {
+        merged.push({ ...local, id: note.id, revision: note.revision });
+        conflictFound = true;
+      }
+      pendingById.delete(note.id);
+    }
+    for (const local of pendingById.values()) {
+      if (base[local.id]) conflictFound = true; // server missing but it was a server note
+      merged.push(local);
+    }
+    data.notes = merged;
+    if (journal.ui && typeof journal.ui === 'object') data.ui = { ...data.ui, ...journal.ui };
+    if (conflictFound) conflict = { message: '本地待同步修改与服务器版本不一致，需要选择保留内容' };
     return true;
   };
-  const hydrateRemote = async () => {
-    try {
-      const response = await fetch('/api/state');
-      if (!response.ok) throw new Error('API load failed');
-      const result = await response.json();
-      if (result.initialized && result.state) {
-        data = result.state;
-        data.ui = { theme: 'light', layout: 'list', sort: 'updated', ...data.ui };
-        try { localStorage.setItem(KEY, JSON.stringify(data)); } catch {}
+
+  const mergeLegacyRecovery = journal => {
+    // 旧版只有整份快照、没有 revision：恢复日志代表用户最后一次本地编辑，
+    // 同一 id 以本地内容为准（last-write-wins），只新增不删除服务器笔记。
+    const pending = normalize(journal);
+    if (!pending) return false;
+    const tagIdMap = new Map();
+    const mergedTags = [...data.tags];
+    for (const tag of pending.tags) {
+      let existing = mergedTags.find(item => item.id === tag.id) || mergedTags.find(item => item.name === tag.name);
+      if (existing) {
+        existing.name = tag.name; existing.color = tag.color;
+        tagIdMap.set(tag.id, existing.id);
       } else {
-        await fetch('/api/state', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data),
-        });
+        mergedTags.push({ ...tag });
+        tagIdMap.set(tag.id, tag.id);
       }
-    } catch (error) {
-      console.warn('Hephaestus backend unavailable; using browser cache:', error);
+    }
+    data.tags = mergedTags;
+    const pendingById = new Map(pending.notes.map(note => [note.id, {
+      ...note,
+      tags: (note.tags || []).map(id => tagIdMap.get(id) || id),
+    }]));
+    const merged = [];
+    for (const note of data.notes) {
+      const local = pendingById.get(note.id);
+      if (!local) { merged.push(note); continue; }
+      pendingById.delete(note.id);
+      merged.push({ ...local, id: note.id, revision: note.revision || local.revision });
+    }
+    for (const local of pendingById.values()) merged.push(local);
+    data.notes = merged;
+    if (journal.ui && typeof journal.ui === 'object') data.ui = { ...data.ui, ...journal.ui };
+    return true;
+  };
+
+  const adopt = snapshot => {
+    const next = normalize(snapshot);
+    if (!next) return false;
+    data.notes = next.notes; data.tags = next.tags; data.ui = next.ui;
+    resetBaseline();
+    return true;
+  };
+
+  const replaceTagId = (oldId, newId) => {
+    if (!oldId || !newId || oldId === newId) return;
+    const tag = data.tags.find(item => item.id === oldId);
+    const existing = data.tags.find(item => item.id === newId);
+    if (tag) {
+      if (existing) data.tags.splice(data.tags.indexOf(tag), 1);
+      else tag.id = newId;
+    }
+    data.notes.forEach(note => {
+      if (Array.isArray(note.tags)) note.tags = [...new Set(note.tags.map(id => id === oldId ? newId : id))];
+    });
+  };
+
+  const adoptTags = remoteTags => {
+    (Array.isArray(remoteTags) ? remoteTags : []).forEach(remote => {
+      if (!remote || !remote.id) return;
+      let local = data.tags.find(tag => tag.id === remote.id) || data.tags.find(tag => tag.name === remote.name);
+      if (!local) {
+        data.tags.push({ id: remote.id, name: remote.name, color: remote.color || '#8b8f94' });
+        return;
+      }
+      if (local.id !== remote.id) replaceTagId(local.id, remote.id);
+      local.name = remote.name; local.color = remote.color || local.color;
+    });
+  };
+
+  const applyRemoteNote = (note, remote, target) => {
+    adoptTags(remote.tagObjects);
+    const oldId = note.id;
+    if (remote.id && remote.id !== oldId) {
+      note.id = remote.id;
+      if (typeof state !== 'undefined' && state.sel === oldId) state.sel = remote.id;
+    }
+    note.revision = Number(remote.revision) || 1;
+    if (canonical(note) === target) {
+      if (String(note.title || '').trim()) note.title = remote.title;
+      else note.title = '';
+      note.html = remote.html || '';
+      note.tags = Array.isArray(remote.tags) ? [...remote.tags] : [];
+      note.category = remote.category || '';
+      note.fav = Boolean(remote.fav); note.trashed = Boolean(remote.trashed);
+      note.created = remote.created; note.updated = remote.updated;
+      note.attachments = Array.isArray(remote.attachments) ? remote.attachments : [];
+    } else {
+      resync = true;
+    }
+    baselineNotes.delete(oldId);
+    baselineNotes.set(note.id, descriptor(remote));
+  };
+
+  const applyRemoteMeta = (note, remote) => {
+    adoptTags(remote.tagObjects);
+    const oldId = note.id;
+    if (remote.id && remote.id !== oldId) {
+      note.id = remote.id;
+      if (typeof state !== 'undefined' && state.sel === oldId) state.sel = remote.id;
+    }
+    note.revision = Number(remote.revision) || note.revision || 1;
+    note.fav = Boolean(remote.fav); note.trashed = Boolean(remote.trashed);
+    if (canonical(note) === canonical(remote)) {
+      note.updated = remote.updated;
+      if (!String(note.title || '').trim()) note.title = '';
+    }
+    baselineNotes.delete(oldId);
+    baselineNotes.set(note.id, descriptor(remote));
+  };
+
+  const applyServerFull = (note, remote) => {
+    adoptTags(remote.tagObjects);
+    const oldId = note.id, oldSel = typeof state !== 'undefined' ? state.sel : null;
+    note.id = remote.id || note.id; note.title = remote.title || '';
+    note.html = remote.html || ''; note.tags = Array.isArray(remote.tags) ? [...remote.tags] : [];
+    note.category = remote.category || ''; note.fav = Boolean(remote.fav); note.trashed = Boolean(remote.trashed);
+    note.created = remote.created; note.updated = remote.updated;
+    note.revision = Number(remote.revision) || 1;
+    if (oldSel === oldId && typeof state !== 'undefined') state.sel = note.id;
+    baselineNotes.delete(oldId);
+    baselineNotes.set(note.id, descriptor(remote));
+  };
+
+  const syncTags = async () => {
+    const remote = await port.fetchTags();
+    const remoteById = new Map(remote.map(tag => [tag.id, tag]));
+    const remoteByName = new Map(remote.map(tag => [tag.name, tag]));
+    const known = new Set(baselineTags.keys());
+    for (const local of [...data.tags]) {
+      let match = remoteById.get(local.id) || remoteByName.get(local.name);
+      if (!match) {
+        const created = await port.createTag(local);
+        replaceTagId(local.id, created.id);
+        local.id = created.id; local.name = created.name; local.color = created.color;
+        baselineTags.set(created.id, { name: created.name, color: created.color });
+        continue;
+      }
+      if (match.id !== local.id) replaceTagId(local.id, match.id);
+      local.id = match.id;
+      if (match.name !== local.name || match.color !== local.color) {
+        const updated = await port.updateTag({ id: match.id, name: local.name, color: local.color });
+        local.name = updated.name; local.color = updated.color;
+      } else {
+        local.name = match.name; local.color = match.color;
+      }
+      baselineTags.set(match.id, { name: local.name, color: local.color });
+    }
+    const localIds = new Set(data.tags.map(tag => tag.id));
+    for (const remoteTag of remote) {
+      if (known.has(remoteTag.id) && !localIds.has(remoteTag.id)) {
+        await port.deleteTag(remoteTag.id);
+        baselineTags.delete(remoteTag.id);
+      }
     }
   };
-  const size = () => (localStorage.getItem(KEY) || '').length * 2;
-  load();
-  return { get data() { return data; }, save, hydrateRemote, size, QUOTA, day };
+
+  const createRemoteNote = async note => {
+    const target = canonical(note);
+    const wantTrashed = Boolean(note.trashed), wantFav = Boolean(note.fav);
+    const remote = await port.createNote(note, data.tags);
+    if (!data.notes.includes(note)) {
+      try { await port.remove(remote); } catch (error) { if (!error || error.status !== 404) throw error; }
+      baselineNotes.delete(remote.id);
+      return;
+    }
+    applyRemoteNote(note, remote, target);
+    if (wantFav) {
+      const favorite = await port.setFavorite({ ...note, fav: true });
+      applyRemoteMeta(note, favorite);
+    }
+    if (wantTrashed) {
+      note.trashed = true;
+      await port.trash(note);
+      const trashed = await port.getNote(note.id);
+      applyRemoteMeta(note, trashed);
+    }
+  };
+
+  const resolveConflict = async (note, error) => {
+    const server = await port.getNote(note.id);
+    let choice = 'later';
+    if (conflictHandler) {
+      try { choice = await conflictHandler(note, server, error); } catch { choice = 'later'; }
+    }
+    if (choice === 'server') { applyServerFull(note, server); return true; }
+    if (choice === 'mine') {
+      note.revision = Number(server.revision) || 1;
+      const target = canonical(note);
+      const remote = await port.updateNote(note, data.tags);
+      applyRemoteNote(note, remote, target);
+      return true;
+    }
+    conflict = { noteId: note.id, serverRevision: server.revision, message: error.message };
+    return false;
+  };
+
+  const reconcileV2 = async () => {
+    await syncTags();
+    const localIds = new Set(data.notes.map(note => note.id));
+    for (const id of [...baselineNotes.keys()]) {
+      if (localIds.has(id)) continue;
+      try { await port.remove({ id }); } catch (error) { if (!error || error.status !== 404) throw error; }
+      baselineNotes.delete(id);
+    }
+    for (const note of [...data.notes]) {
+      let base = baselineNotes.get(note.id);
+      if (!base) { await createRemoteNote(note); base = baselineNotes.get(note.id); }
+      if (!data.notes.includes(note)) continue;
+      if (!base) continue;
+      if (Boolean(note.trashed) !== Boolean(base.trashed)) {
+        if (note.trashed) {
+          await port.trash(note);
+          const trashed = await port.getNote(note.id);
+          applyRemoteMeta(note, trashed);
+        } else {
+          const restored = await port.restore(note);
+          applyRemoteMeta(note, restored);
+        }
+        base = baselineNotes.get(note.id);
+      }
+      const current = baselineNotes.get(note.id);
+      if (!current) continue;
+      if (Boolean(note.fav) !== Boolean(current.fav)) {
+        const favorite = await port.setFavorite(note);
+        applyRemoteMeta(note, favorite);
+      }
+      const latest = baselineNotes.get(note.id);
+      if (!latest) continue;
+      if (canonical(note) !== latest.serial) {
+        const target = canonical(note);
+        try {
+          const remote = await port.updateNote(note, data.tags);
+          applyRemoteNote(note, remote, target);
+        } catch (error) {
+          if (error && error.name === 'ConflictError') {
+            const resolved = await resolveConflict(note, error);
+            if (!resolved) throw error;
+          } else throw error;
+        }
+      }
+    }
+    const currentUi = uiKey(data.ui);
+    if (currentUi !== baselineUi) {
+      const saved = await port.saveSettings(data.ui);
+      data.ui = { ...data.ui, ...saved };
+      baselineUi = uiKey(data.ui);
+    }
+  };
+
+  const runReconcile = async () => {
+    if (reconcileRunning) return;
+    reconcileRunning = true; saving = true; lastError = null; notify();
+    try {
+      do { resync = false; await reconcileV2(); } while (resync);
+      dirty = false; conflict = null; blocked = false; clearJournal();
+    } catch (error) {
+      lastError = error;
+      if (error && error.name === 'ConflictError') conflict = conflict || { message: error.message };
+    } finally {
+      reconcileRunning = false;
+      if (resync && !lastError) runReconcile();
+      else { saving = false; notify(); finishIdle(); }
+    }
+  };
+
+  const saveLegacy = async () => {
+    if (legacyRunning) { legacyResync = true; return; }
+    legacyRunning = true; saving = true; notify();
+    try {
+      await port.saveLegacy(data);
+      dirty = false; lastError = null; blocked = false;
+      if (legacyRecovery) { legacyRecovery = false; clearJournal(); }
+    } catch (error) {
+      lastError = error;
+    } finally {
+      legacyRunning = false;
+      if (legacyResync) { legacyResync = false; saveLegacy(); }
+      else { saving = false; notify(); finishIdle(); }
+    }
+  };
+
+  const save = () => {
+    const ok = cache();
+    dirty = true;
+    if (!initialized) { saveRecoveryJournal(); notify(); return ok; }
+    if (adapter === 'v2') {
+      writeJournal();
+      if (blocked) { lastError = lastError || new Error('V2 服务未连接，修改已保存在本地'); notify(); return ok; }
+      resync = true; saving = true; notify(); runReconcile();
+      return ok;
+    }
+    saving = true; notify();
+    clearTimeout(legacyTimer);
+    legacyTimer = setTimeout(() => { legacyTimer = null; saveLegacy(); }, 350);
+    return ok;
+  };
+
+  const flush = () => {
+    if (!initialized) { saveRecoveryJournal(); notify(); return; }
+    clearTimeout(legacyTimer); legacyTimer = null;
+    if (adapter === 'v2') {
+      writeJournal();
+      if (blocked) { lastError = lastError || new Error('V2 服务未连接，修改已保存在本地'); notify(); return; }
+      resync = true; saving = true; notify(); runReconcile();
+      return;
+    }
+    saveLegacy();
+  };
+
+  let initPromise = null;
+  let pendingMerge = false;
+  const init = () => {
+    if (initPromise) return initPromise;
+    initPromise = (async () => {
+      port = HephaestusDataPort.createDataPort({});
+      const opened = await port.open();
+      mode = opened.mode; status = port.status; adapter = opened.adapter;
+      const journal = readJournal();
+      if (opened.snapshot) {
+        adopt(opened.snapshot);
+        if (journal) {
+          if (adapter === 'v2') pendingMerge = mergeJournal(journal);
+          else if (journal.reason === 'init_failed') { pendingMerge = mergeLegacyRecovery(journal); legacyRecovery = true; }
+        }
+      } else if (adapter === 'v2') {
+        blocked = true;
+        lastError = opened.error || new Error('V2 数据读取失败');
+      } else if (opened.error) {
+        lastError = opened.error;
+      } else if (mode === 'legacy') {
+        if (journal && journal.reason === 'init_failed') legacyRecovery = true;
+        try { await port.saveLegacy(data); } catch (error) { lastError = error; }
+      }
+      initialized = true; saving = false; dirty = pendingMerge;
+      cache(); notify();
+      if (pendingMerge && !conflict) {
+        if (adapter === 'v2') runReconcile();
+        else saveLegacy();
+      }
+      return opened;
+    })().catch(error => {
+      mode = 'unknown';
+      lastError = error;
+      saving = false;
+      notify();
+      throw error;
+    });
+    return initPromise;
+  };
+
+  const subscribe = handler => { statusHandler = handler; notify(); };
+  const setConflictHandler = handler => { conflictHandler = handler; };
+  const retry = async () => {
+    if (!port) return;
+    if (!initialized) {
+      try {
+        const opened = await port.open();
+        mode = opened.mode; status = port.status; adapter = opened.adapter;
+        const journal = readJournal();
+        if (opened.snapshot) {
+          adopt(opened.snapshot);
+          let merged = false;
+          if (journal) {
+            if (adapter === 'v2') merged = mergeJournal(journal);
+            else if (journal.reason === 'init_failed') { merged = mergeLegacyRecovery(journal); legacyRecovery = true; }
+          }
+          blocked = false; lastError = null; initialized = true; dirty = merged;
+          cache(); notify();
+          if (merged && !conflict) {
+            if (adapter === 'v2') runReconcile();
+            else saveLegacy();
+          }
+        } else if (adapter === 'v2') {
+          blocked = true;
+          lastError = opened.error || new Error('V2 数据读取失败');
+          initialized = true; notify();
+        } else if (opened.error) {
+          initialized = true; lastError = opened.error; notify();
+        } else {
+          initialized = true; lastError = null; dirty = false;
+          if (journal && journal.reason === 'init_failed') legacyRecovery = true;
+          if (mode === 'legacy') { try { await port.saveLegacy(data); } catch (error) { lastError = error; } }
+          cache(); notify();
+        }
+      } catch (error) {
+        mode = 'unknown'; lastError = error; notify();
+      }
+      return;
+    }
+    if (adapter !== 'v2') { blocked = false; lastError = null; save(); return; }
+    const opened = await port.open();
+    mode = opened.mode; status = port.status; adapter = opened.adapter;
+    if (opened.mode === 'v2_ready') {
+      if (!opened.snapshot) {
+        blocked = true;
+        lastError = opened.error || new Error('V2 数据读取失败');
+        initialized = true; notify();
+        return;
+      }
+      adopt(opened.snapshot);
+      const journal = readJournal();
+      const merged = journal ? mergeJournal(journal) : false;
+      blocked = false; lastError = null; initialized = true; dirty = merged;
+      cache(); notify();
+      if (merged && !conflict) runReconcile();
+      return;
+    }
+    if (opened.snapshot) adopt(opened.snapshot);
+    blocked = false; lastError = opened.error || null; initialized = true; dirty = false;
+    cache(); notify();
+  };
+  return {
+    get data() { return data; }, init, save, flush, retry, size: () => (localStorage.getItem(KEY) || '').length * 2,
+    QUOTA, day, subscribe, setConflictHandler, waitForIdle,
+    get mode() { return mode; }, get modeLabel() { return modeLabel(); }, get adapter() { return adapter; },
+    get status() { return status; }, get saving() { return saving; }, get label() { return label(); },
+    get diagnostics() { return port ? port.diagnostics : []; }, get lastError() { return lastError; },
+    get conflict() { return conflict; },
+  };
 })();
+if (typeof window !== 'undefined') window.HephaestusStore = Store;
 
 /* ===================== Markdown conversion ===================== */
 const Md = (() => {
@@ -290,13 +836,18 @@ let saveTimer = null, dirty = false;
 const setStatus = t => { el.saveState.textContent = t; };
 const commit = () => {
   clearTimeout(saveTimer); saveTimer = null; dirty = false;
-  const ok = Store.save(); const d = new Date();
-  setStatus(ok ? `已保存 ${pad(d.getHours())}:${pad(d.getMinutes())}` : '保存失败：存储空间不足（请删除大图或笔记）');
-  if (!ok) UI.toast('保存失败：浏览器存储空间已满');
+  const ok = Store.save();
+  if (!ok) { setStatus('保存失败：存储空间不足（请删除大图或笔记）'); UI.toast('保存失败：浏览器存储空间已满'); }
   renderAll(false);
 };
 const touch = () => { dirty = true; setStatus('保存中…'); clearTimeout(saveTimer); saveTimer = setTimeout(commit, 600); };
-const flush = (manual = false) => { if (dirty || manual) { commit(); if (manual) UI.toast('已保存'); } };
+const flush = (manual = false) => {
+  if (dirty || manual) {
+    clearTimeout(saveTimer); saveTimer = null; dirty = false;
+    Store.flush();
+    if (manual) UI.toast('正在保存到本地数据');
+  }
+};
 
 /* ---- rendering ---- */
 const renderNav = () => {
@@ -306,7 +857,7 @@ const renderNav = () => {
 };
 const renderStorage = () => {
   const used = Store.size(), pct = Math.min(100, used / Store.QUOTA * 100), f = b => b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB';
-  el.storage.innerHTML = `<div class="ring" style="--p:${pct.toFixed(1)}"></div><div class="st-text"><b>存储空间</b>${f(used)} / 5 MB<div class="st-bar"><i style="width:${pct.toFixed(1)}%"></i></div></div>`;
+  el.storage.innerHTML = `<div class="ring" style="--p:${pct.toFixed(1)}"></div><div class="st-text"><b>存储空间</b>${f(used)} / 5 MB<div class="st-bar"><i style="width:${pct.toFixed(1)}%"></i></div><div style="font-size:10px;color:var(--muted);margin-top:3px">${esc(Store.modeLabel)}</div></div>`;
 };
 const renderList = () => {
   const list = visible(), grid = D.ui.layout === 'grid';
@@ -346,7 +897,7 @@ function renderEditor() {
   el.title.value = n.title; el.content.innerHTML = n.html;
   const ro = n.trashed; el.title.disabled = ro; el.content.contentEditable = String(!ro);
   $$('button,select', el.toolbar).forEach(b => { if (b.id !== 'fsBtn') b.disabled = ro; });
-  renderNoteMeta(); updateCounters(); setStatus(ro ? '回收站中的笔记为只读，可恢复后编辑' : '已保存');
+  renderNoteMeta(); updateCounters(); setStatus(ro ? '回收站中的笔记为只读，可恢复后编辑' : Store.label);
 }
 const select = (id, open = true) => {
   flush(); state.sel = id; renderList(); renderEditor();
@@ -594,5 +1145,27 @@ const applyRelease = async () => {
 if (new URLSearchParams(location.search).has('desktop')) document.documentElement.dataset.desktop = '1';
 Icons.hydrate(); applyTheme(); applyRelease();
 state.sel = null;
-Store.hydrateRemote().finally(() => { renderAll(); });
+Store.setConflictHandler((note, server, error) => new Promise(resolve => {
+  let done = false;
+  const finish = choice => { if (done) return false; done = true; resolve(choice); return true; };
+  const revision = server && server.revision ? server.revision : '未知';
+  UI.modal({
+    title: '检测到编辑冲突',
+    body: `<p>服务器上的这篇笔记已有更新（服务器 revision ${esc(String(revision))}），你的修改仍保存在当前页面。</p><p>请选择保留你的内容，或重新加载服务器版本。</p>`,
+    onClose: () => { if (!done) { done = true; resolve('later'); } },
+    actions: [
+      { label: '保留我的修改', kind: 'primary', onClick: () => finish('mine') },
+      { label: '重新加载服务器', onClick: () => finish('server') },
+      { label: '稍后处理', onClick: () => finish('later') },
+    ],
+  });
+}));
+Store.subscribe(s => {
+  setStatus(s.label);
+  if (s.mode && el.storage) renderStorage();
+});
+Store.init().catch(error => {
+  console.error('Hephaestus DataPort 初始化失败', error);
+  setStatus('本地数据已就绪，服务暂不可用');
+}).finally(() => { renderAll(); });
 })();

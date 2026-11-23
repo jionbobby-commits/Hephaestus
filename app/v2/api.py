@@ -28,6 +28,7 @@ from app.v2.contracts import (
 )
 from app.v2.dataport import ConflictError, InvalidReferenceError, NotFoundError, SqlAlchemyDataPort
 from app.v2.db import get_v2_session
+from app.v2.status import detect_data_mode
 
 router = APIRouter(prefix="/api/v2", tags=["V2 数据"])
 
@@ -58,6 +59,23 @@ def _schema_missing(exc: OperationalError) -> HTTPException:
 @router.get("/meta")
 def meta():
     return {"contract_version": "2.0", "schema_version": 1, "server_time": utc_now_iso()}
+
+
+@router.get("/status")
+def data_status(session: Session = Depends(get_v2_session)):
+    """Read-only mode detection used by the frontend DataPort.
+
+    The endpoint never creates tables or migrates. If the database itself
+    cannot be inspected, return 503; the frontend then stops writing instead
+    of guessing a mode, which would risk two write sources.
+    """
+    try:
+        return detect_data_mode(session)
+    except Exception as exc:  # noqa: BLE001 - diagnostic path must fail closed
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"无法读取数据状态，前端已停止写入：{exc}",
+        ) from exc
 
 
 @router.get("/notes", response_model=NotePage)

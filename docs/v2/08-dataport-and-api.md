@@ -1,6 +1,6 @@
-# DataPort 与 /api/v2（B1.3 / B1.4）
+# DataPort 与 /api/v2（B1.3 / B1.4 / B2）
 
-状态：Python 与 TypeScript DataPort 已实现；/api/v2 已注册；旧 /api/state 和 /notes 未修改。
+状态：Python 与 TypeScript DataPort 已实现；/api/v2 已注册；B2 已完成前端 DataPort 接入、四态检测与安全回退；旧 /api/state 和 /notes 未修改。
 
 ## 1. 分层
 
@@ -76,6 +76,7 @@ UI / API 路由
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
+| GET | /status | 只读数据模式检测：legacy / migration_pending / v2_ready / migration_failed |
 | GET | /meta | contract_version、schema_version、server_time |
 | GET | /notes | q、tag_id、favorite、trashed、page、page_size、sort |
 | POST | /notes | 创建，201 |
@@ -96,10 +97,25 @@ UI / API 路由
 - app/main.py 同时 include 旧 notes/state router 和新 v2 router；旧路径、旧响应不变。
 - /api/state 继续读写 frontend_state，不经过 V2 表。
 - 应用启动不会创建 v2_* 表；未迁移时 /api/v2 返回 503，旧接口仍可用。
+- /api/v2/status 只读，不创建表、不迁移、不写 frontend_state。
+
+### 4.1 前端如何选择接口
+
+前端唯一网络层是 static/dataport.js，Store 只通过它读写：
+
+| 状态 | 数据接口 | 说明 |
+|---|---|---|
+| legacy | GET/PUT /api/state | 没有 v2_* 表 |
+| migration_pending | GET/PUT /api/state | v2 表不完整或缺迁移标记 |
+| migration_failed | GET/PUT /api/state | 显式失败标记 |
+| v2_ready | /api/v2/* | 完整 v2 表 + 迁移标记 |
+
+只有状态接口返回 404/405 才视为旧服务端并回退 /api/state。网络错误、超时、5xx 或未知响应会停止写入并提示，避免把已迁移的库重新写回旧快照；此时编辑写入 localStorage 恢复日志，下一次成功初始化后合并。详见 [12-frontend-dataport.md](12-frontend-dataport.md)。
 
 ## 5. 契约测试
 
-- Python：tests/test_v2_dataport.py 6 项、test_v2_api.py 3 项、test_v2_contract_fixture.py 1 项。
+- Python：tests/test_v2_dataport.py 6 项、test_v2_api.py 3 项、test_v2_contract_fixture.py 1 项、test_v2_status.py 5 项、test_v2_ui.py 5 项（真实 WebView2，含初始化失败恢复）。
+- 前端 DataPort：tests/frontend/dataport.test.cjs 8 项（Node 内置测试，无 npm 依赖）。
 - 移动端：mobile/tests/contract.test.ts 5 项；命令见 10-contract-tests.md。
 - 共享 fixture：contracts/v2/contract_fixture.json；Python 和 TypeScript 都按它校验字段和精确 key 集合。
 
@@ -108,4 +124,5 @@ UI / API 路由
 - 附件上传、下载、存储、引用计数属于阶段 E。
 - Capacitor 原生 SQLite 适配器、真实 Android/iOS 壳属于阶段 G。
 - AI 调用、流式响应、密钥托管属于阶段 C。
-- /api/v2 尚未接入前端 UI；B1 只做数据层，前端继续使用 /api/state。
+- 前端已接入 /api/v2（B2）；真实用户库仍未迁移，因此当前真实运行仍走 /api/state。
+- 真实库迁移、冲突中心、附件与移动端壳分别属于后续阶段，需单独授权。
