@@ -23,6 +23,7 @@
 | [17-b3-rollback-report.md](17-b3-rollback-report.md) | B3 回滚与失败恢复验证 |
 | [18-b3-migration-runbook.md](18-b3-migration-runbook.md) | B3 正式迁移预案（未执行） |
 | [19-b3-ui-acceptance.md](19-b3-ui-acceptance.md) | B3 迁移副本真实 UI 验收 |
+| [20-phase-b3-report.md](20-phase-b3-report.md) | B3 阶段总报告、测试结果、限制与下一步授权 |
 
 ## 当前状态
 
