@@ -182,6 +182,12 @@ def validate_snapshot(payload: dict[str, Any], source: str | Path) -> SnapshotSu
             raise MigrationError(f"标签 id 缺失或重复: {tag_id!r}")
         tag_ids.add(tag_id)
         unknown_tag.update(set(tag) - known_tag)
+    if unknown_tag:
+        # TagV2 has no extra_json column yet. Failing closed is safer than
+        # silently dropping fields during a user-data migration.
+        raise MigrationError(
+            "标签包含当前 schema 无法保留的未知字段: " + ", ".join(sorted(unknown_tag))
+        )
     for note in notes:
         for tag_id in note.get("tags") or []:
             if str(tag_id) not in tag_ids:
@@ -256,12 +262,9 @@ def _insert_notes(session: Session, notes: list[dict[str, Any]], tags: dict[str,
 
 def _insert_settings(session: Session, payload: dict[str, Any], now: str) -> None:
     ui = payload.get("ui") if isinstance(payload.get("ui"), dict) else {}
-    settings = AppSettings(
-        locale=str(ui.get("locale") or "zh-CN"),
-        theme=str(ui.get("theme") or "system"),
-        layout=str(ui.get("layout") or "list"),
-        sort=str(ui.get("sort") or "updated"),
-    )
+    # AppSettings allows extra keys; validating here means an invalid known
+    # value fails the whole migration instead of being silently replaced.
+    settings = AppSettings.model_validate(ui)
     for key, value in settings.model_dump().items():
         session.add(AppSettingV2(key=key, value_json=json.dumps(value, ensure_ascii=False), updated_at=now))
 
@@ -324,19 +327,53 @@ def migrate_database(
     return report
 
 
+def _legacy_payload_text(path: str | Path) -> str | None:
+    conn = _connect(path, readonly=True)
+    try:
+        row = conn.execute("SELECT payload FROM frontend_state WHERE id=1").fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def _legacy_notes_count(path: str | Path) -> int | None:
+    conn = _connect(path, readonly=True)
+    try:
+        table = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='notes'"
+        ).fetchone()
+        if not table:
+            return None
+        return int(conn.execute("SELECT count(*) FROM notes").fetchone()[0])
+    finally:
+        conn.close()
+
+
 def verify_against_snapshot(source_db: str | Path, target_db: str | Path) -> dict[str, Any]:
-    """Compare every migrated note against the source JSON snapshot."""
+    """Compare migrated data with the source snapshot, including unknown fields.
+
+    This is intentionally stricter than a count check: every field that B3
+    promises to preserve is compared, and the legacy frontend_state payload is
+    compared byte-for-byte. Extra rows in the target are also reported.
+    """
     payload = read_snapshot(source_db)
     summary = validate_snapshot(payload, source_db)
     target = Path(target_db).resolve()
     conn = _connect(target, readonly=True)
     mismatches: list[str] = []
     try:
+        marker = conn.execute(
+            "SELECT applied_at FROM v2_schema_migrations WHERE version=?", (MIGRATION_VERSION,)
+        ).fetchone()
+        applied_at = str(marker[0]) if marker else utc_now_iso()
+        if marker is None:
+            mismatches.append("migration_marker")
+        expected_settings = AppSettings.model_validate(payload.get("ui") or {}).model_dump()
         for note in payload.get("notes") or []:
             note_id = str(note["id"])
             row = conn.execute(
-                "SELECT id, title, content_html, created_at, updated_at, is_favorite, is_trashed, category "
-                "FROM v2_notes WHERE id=?", (note_id,)
+                "SELECT title, content_html, created_at, updated_at, is_favorite, is_trashed, category, "
+                "favorited_at, trashed_at, extra_json FROM v2_notes WHERE id=?", (note_id,)
             ).fetchone()
             if row is None:
                 mismatches.append(f"missing note {note_id}")
@@ -346,14 +383,25 @@ def verify_against_snapshot(source_db: str | Path, target_db: str | Path) -> dic
             expected_created = epoch_ms_to_iso(note["created"])
             expected_updated = epoch_ms_to_iso(note["updated"])
             expected_category = (str(note["category"])[:30] if note.get("category") else None)
+            favorite = bool(note.get("fav"))
+            trashed = bool(note.get("trashed"))
+            known = {"id", "title", "html", "tags", "fav", "trashed", "created", "updated", "category"}
+            expected_extra = {k: v for k, v in note.items() if k not in known}
+            try:
+                actual_extra = json.loads(row[9] or "{}")
+            except json.JSONDecodeError:
+                actual_extra = {"__invalid_json__": True}
             checks = [
-                (row[1], expected_title, "title"),
-                (row[2], expected_html, "content_html"),
-                (row[3], expected_created, "created_at"),
-                (row[4], expected_updated, "updated_at"),
-                (bool(row[5]), bool(note.get("fav")), "is_favorite"),
-                (bool(row[6]), bool(note.get("trashed")), "is_trashed"),
-                (row[7], expected_category, "category"),
+                (row[0], expected_title, "title"),
+                (row[1], expected_html, "content_html"),
+                (row[2], expected_created, "created_at"),
+                (row[3], expected_updated, "updated_at"),
+                (bool(row[4]), favorite, "is_favorite"),
+                (bool(row[5]), trashed, "is_trashed"),
+                (row[6], expected_category, "category"),
+                (row[7], expected_updated if favorite else None, "favorited_at"),
+                (row[8], expected_updated if trashed else None, "trashed_at"),
+                (actual_extra, expected_extra, "extra_json"),
             ]
             for actual, expected, field in checks:
                 if actual != expected:
@@ -368,22 +416,61 @@ def verify_against_snapshot(source_db: str | Path, target_db: str | Path) -> dic
                 mismatches.append(f"{note_id}.tags")
         for tag in payload.get("tags") or []:
             tag_id = str(tag["id"])
-            row = conn.execute("SELECT name, color FROM v2_tags WHERE id=?", (tag_id,)).fetchone()
+            row = conn.execute(
+                "SELECT name, color, created_at, updated_at FROM v2_tags WHERE id=?", (tag_id,)
+            ).fetchone()
             if row is None:
                 mismatches.append(f"missing tag {tag_id}")
                 continue
-            if row[0] != str(tag.get("name") or "未命名标签")[:32]:
-                mismatches.append(f"{tag_id}.name")
-            if row[1] != str(tag.get("color") or "#8b8f94"):
-                mismatches.append(f"{tag_id}.color")
+            checks = [
+                (row[0], str(tag.get("name") or "未命名标签")[:32], "name"),
+                (row[1], str(tag.get("color") or "#8b8f94"), "color"),
+                (row[2], _iso_or_now(tag.get("created"), applied_at), "created_at"),
+                (row[3], _iso_or_now(tag.get("updated"), applied_at), "updated_at"),
+            ]
+            for actual, expected, field in checks:
+                if actual != expected:
+                    mismatches.append(f"{tag_id}.{field}")
         if summary.note_count != len(payload.get("notes") or []):
             mismatches.append("note_count")
         if summary.tag_count != len(payload.get("tags") or []):
             mismatches.append("tag_count")
+        target_note_count = int(conn.execute("SELECT count(*) FROM v2_notes").fetchone()[0])
+        target_tag_count = int(conn.execute("SELECT count(*) FROM v2_tags").fetchone()[0])
+        target_note_tags = int(conn.execute("SELECT count(*) FROM v2_note_tags").fetchone()[0])
+        if target_note_count != summary.note_count:
+            mismatches.append("target_note_count")
+        if target_tag_count != summary.tag_count:
+            mismatches.append("target_tag_count")
+        if target_note_tags != summary.note_tags_count:
+            mismatches.append("target_note_tags")
+        settings_rows = {
+            row[0]: json.loads(row[1])
+            for row in conn.execute("SELECT key, value_json FROM v2_settings").fetchall()
+        }
+        for key, expected in expected_settings.items():
+            if key not in settings_rows:
+                mismatches.append(f"settings.{key}.missing")
+            elif settings_rows[key] != expected:
+                mismatches.append(f"settings.{key}")
+        for key in sorted(set(settings_rows) - set(expected_settings)):
+            mismatches.append(f"settings.{key}.unexpected")
+        legacy_preserved = _legacy_payload_text(source_db) == _legacy_payload_text(target)
+        if not legacy_preserved:
+            mismatches.append("frontend_state")
+        source_notes = _legacy_notes_count(source_db)
+        target_notes = _legacy_notes_count(target)
+        legacy_notes_preserved = source_notes is None or source_notes == target_notes
+        if not legacy_notes_preserved:
+            mismatches.append("legacy_notes_count")
         return {
             "ok": not mismatches,
             "checked_notes": summary.note_count,
             "checked_tags": summary.tag_count,
+            "checked_note_tags": summary.note_tags_count,
+            "checked_settings": len(expected_settings),
+            "frontend_state_preserved": legacy_preserved,
+            "legacy_notes_count_preserved": legacy_notes_preserved,
             "mismatches": mismatches,
         }
     finally:
