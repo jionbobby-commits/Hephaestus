@@ -28,8 +28,14 @@ class FakeTransport:
     def route(self, url: str, payload: object = None, status: int = 200) -> None:
         self.routes[url] = (status, payload)
 
-    def request(self, method, url, *, headers, json_body, timeout, max_bytes):
-        self.calls.append({"method": method, "url": url, "headers": headers, "json": json_body})
+    def request(self, method, url, *, headers, json_body, timeout, max_bytes, resolved_ips=None):
+        self.calls.append({
+            "method": method,
+            "url": url,
+            "headers": headers,
+            "json": json_body,
+            "resolved_ips": resolved_ips,
+        })
         route = self.routes.get(url)
         if isinstance(route, Exception):
             raise route

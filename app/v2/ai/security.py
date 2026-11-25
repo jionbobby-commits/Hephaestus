@@ -20,17 +20,22 @@ OPENAI_COMPATIBLE_KINDS = {"openai", "deepseek", "qwen", "custom"}
 SUPPORTED_KINDS = {"ollama"} | OPENAI_COMPATIBLE_KINDS
 
 _SECRET_PATTERNS = (
-    re.compile(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+"),
-    re.compile(r"(?i)(x-api-key\s*[:=]\s*)[^\s,;]+"),
-    re.compile(r"(?i)(api[_-]?key\s*[=:]\s*)[^\s,;&]+"),
-    re.compile(r"(?i)(sk-[a-z0-9_-]{8,})"),
+    # Header-style values, including JSON-quoted names and Basic auth.
+    re.compile(r"(?i)(authorization\s*[:=]\s*(?:bearer|basic|token)\s+)[^\s,;\"']+"),
+    re.compile(r"(?i)((?:x-api-key|x-goog-api-key|api-key|apikey)\s*[:=]\s*)[\"']?[^\s,;\"']+"),
+    # JSON or form-style names such as "api_key": "..." and access_token=...
+    re.compile(r"(?i)([\"']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret)[\"']?\s*[:=]\s*)[\"']?[^\s,;\"'&]+"),
+    # Credentials in a URL query string.
+    re.compile(r"(?i)([?&](?:api[_-]?key|key|token|access_token)=)[^&\s]+"),
+    # Standalone vendor keys. No capture group: the whole match is replaced.
+    re.compile(r"(?i)sk-[a-z0-9_-]{8,}"),
 )
 
 
 def redact_secret(value: str, *, limit: int = 400) -> str:
     text = str(value or "")
     for pattern in _SECRET_PATTERNS:
-        text = pattern.sub(lambda m: (m.group(1) if m.lastindex else "[REDACTED]") + "[REDACTED]", text)
+        text = pattern.sub(lambda m: (m.group(1) if m.lastindex else "") + "[REDACTED]", text)
     return text[:limit]
 
 
@@ -50,13 +55,20 @@ def new_key_ref() -> str:
 
 
 def _ip_allowed(ip: ipaddress._BaseAddress, *, allow_private: bool) -> bool:
+    # Normalize IPv4-mapped IPv6 (::ffff:127.0.0.1) before classification;
+    # otherwise Python's IPv6 flags can hide a private IPv4 destination.
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
     if ip.is_loopback:
         return True
     if ip.is_unspecified or ip.is_multicast or ip.is_link_local or ip.is_reserved:
         return False
-    if ip.is_private:
-        return allow_private
-    return True
+    if ip.is_global:
+        return True
+    # is_private alone is not enough: shared CGNAT (100.64.0.0/10) and some
+    # documentation/benchmark ranges are neither private nor global.
+    return allow_private
 
 
 def _resolved_addresses(host: str, port: int) -> list[ipaddress._BaseAddress]:
@@ -65,12 +77,17 @@ def _resolved_addresses(host: str, port: int) -> list[ipaddress._BaseAddress]:
     except OSError as exc:
         raise AIError("invalid_base_url", "Base URL 无法解析，请检查域名或网络", status_code=422, details={"reason": type(exc).__name__}) from exc
     result: list[ipaddress._BaseAddress] = []
+    seen: set[str] = set()
     for info in infos:
         address = info[4][0]
         try:
-            result.append(ipaddress.ip_address(address))
+            parsed = ipaddress.ip_address(address)
         except ValueError:
             continue
+        key = str(parsed)
+        if key not in seen:
+            seen.add(key)
+            result.append(parsed)
     if not result:
         raise AIError("invalid_base_url", "Base URL 无法解析出有效地址", status_code=422)
     return result
@@ -84,6 +101,37 @@ def validate_base_url(
     resolve: bool = True,
     resolver=None,
 ) -> str:
+    return _validated_base_url(
+        kind, value, platform=platform, resolve=resolve, resolver=resolver
+    )[0]
+
+
+def resolve_base_url(
+    kind: str,
+    value: str,
+    *,
+    platform: str = "web",
+    resolver=None,
+) -> tuple[str, list[str]]:
+    """Validate a URL and return the exact addresses used for the connection.
+
+    The caller passes these addresses to the transport, which connects to them
+    directly instead of resolving the hostname a second time. This closes the
+    validation-to-request DNS-rebinding window.
+    """
+    return _validated_base_url(
+        kind, value, platform=platform, resolve=True, resolver=resolver
+    )
+
+
+def _validated_base_url(
+    kind: str,
+    value: str,
+    *,
+    platform: str = "web",
+    resolve: bool = True,
+    resolver=None,
+) -> tuple[str, list[str]]:
     raw = (value or "").strip()
     if not raw or len(raw) > 2048:
         raise AIError("invalid_base_url", "Base URL 长度不合法", status_code=422)
@@ -98,7 +146,7 @@ def validate_base_url(
         raise AIError("invalid_base_url", "Base URL 格式不合法", status_code=422) from exc
     if parts.scheme not in {"http", "https"}:
         raise AIError("invalid_base_url", "Base URL 只支持 http 或 https", status_code=422)
-    host = (parts.hostname or "").strip()
+    host = (parts.hostname or "").strip().lower().rstrip(".")
     if not host:
         raise AIError("invalid_base_url", "Base URL 缺少主机名", status_code=422)
     if parts.query or parts.fragment:
@@ -115,26 +163,37 @@ def validate_base_url(
     except ValueError:
         host_ip = None
 
-    if host_ip is not None and not _ip_allowed(host_ip, allow_private=allow_private):
-        raise AIError("invalid_base_url", "Base URL 指向不允许的内网或保留地址", status_code=422)
-    if host_ip is None and resolve:
-        addresses = resolver(host, port or (443 if parts.scheme == "https" else 80)) if resolver else _resolved_addresses(host, port or (443 if parts.scheme == "https" else 80))
-        if not addresses:
+    resolved: list[ipaddress._BaseAddress] = []
+    if host_ip is not None:
+        resolved = [host_ip]
+        if not _ip_allowed(host_ip, allow_private=allow_private):
+            raise AIError("invalid_base_url", "Base URL 指向不允许的内网或保留地址", status_code=422)
+    elif resolve:
+        raw_addresses = resolver(host, port or (443 if parts.scheme == "https" else 80)) if resolver else _resolved_addresses(host, port or (443 if parts.scheme == "https" else 80))
+        for address in raw_addresses:
+            try:
+                parsed = address if isinstance(address, (ipaddress.IPv4Address, ipaddress.IPv6Address)) else ipaddress.ip_address(str(address))
+            except ValueError:
+                continue
+            if str(parsed) not in {str(item) for item in resolved}:
+                resolved.append(parsed)
+        if not resolved:
             raise AIError("invalid_base_url", "Base URL 无法解析出有效地址", status_code=422)
-        for address in addresses:
+        for address in resolved:
             if not _ip_allowed(address, allow_private=allow_private):
                 raise AIError("invalid_base_url", "Base URL 解析到不允许的内网或保留地址", status_code=422)
 
     if kind != "ollama" and parts.scheme != "https" and not (host_ip and host_ip.is_loopback):
-        if not (host_ip is None and host.lower() == "localhost"):
+        if not (host_ip is None and host == "localhost"):
             raise AIError("invalid_base_url", "在线 API 必须使用 https；本机地址可用 http", status_code=422)
 
     path = parts.path.rstrip("/")
-    netloc = parts.netloc
-    if ":" in host and host_ip is not None and host_ip.version == 6:
+    if host_ip is not None and host_ip.version == 6:
         netloc = f"[{host}]" + (f":{port}" if port else "")
+    else:
+        netloc = host + (f":{port}" if port else "")
     normalized = f"{parts.scheme}://{netloc}{path}"
-    return normalized
+    return normalized, [str(item) for item in resolved]
 
 
 def provider_label(value: str) -> str:

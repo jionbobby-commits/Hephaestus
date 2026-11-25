@@ -6,6 +6,7 @@ the OS-protected store chosen here; tests inject InMemorySecretStore.
 from __future__ import annotations
 
 import base64
+import contextlib
 import ctypes
 import json
 import os
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from ctypes import wintypes
 from pathlib import Path
 from typing import Protocol
@@ -121,11 +123,17 @@ def _default_secret_path() -> Path:
 
 
 class FileSecretStore:
-    """DPAPI-protected JSON file (Windows). Ciphertext only, atomic writes."""
+    """DPAPI-protected JSON file (Windows). Ciphertext only, atomic writes.
 
-    def __init__(self, path: Path | None = None) -> None:
+    A separate lock file serialises read-modify-write cycles across threads and
+    processes. Without it two processes can each read the same JSON and the
+    second replace() silently loses the first process's key.
+    """
+
+    def __init__(self, path: Path | None = None, *, lock_timeout: float = 10.0) -> None:
         self.path = Path(path) if path is not None else _default_secret_path()
         self._lock = threading.Lock()
+        self.lock_timeout = max(0.1, float(lock_timeout))
 
     def _read(self) -> dict[str, str]:
         if not self.path.exists():
@@ -142,7 +150,7 @@ class FileSecretStore:
             raise SecretStoreError("密钥存储文件损坏，未读取明文") from exc
 
     def _write(self, secrets: dict[str, str]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         payload = json.dumps({"version": 1, "secrets": secrets}, ensure_ascii=False)
         temp_name = None
         try:
@@ -151,11 +159,24 @@ class FileSecretStore:
             ) as handle:
                 temp_name = handle.name
                 handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
             try:
                 os.chmod(temp_name, 0o600)
             except OSError:
                 pass
             os.replace(temp_name, self.path)
+            # Make the directory entry durable on POSIX. Windows has no
+            # equivalent directory fsync; os.replace is still atomic.
+            if os.name != "nt":
+                try:
+                    directory = os.open(str(self.path.parent), os.O_RDONLY)
+                    try:
+                        os.fsync(directory)
+                    finally:
+                        os.close(directory)
+                except OSError:
+                    pass
         except OSError as exc:
             if temp_name:
                 try:
@@ -164,12 +185,67 @@ class FileSecretStore:
                     pass
             raise SecretStoreError("无法写入密钥存储") from exc
 
-    def has(self, ref: str) -> bool:
+    @contextlib.contextmanager
+    def _process_lock(self):
+        lock_path = self.path.with_name(self.path.name + ".lock")
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            handle = open(lock_path, "a+b")
+        except OSError as exc:
+            raise SecretStoreError("无法打开密钥存储锁文件") from exc
+        locked = False
+        try:
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"0")
+                handle.flush()
+            deadline = time.monotonic() + self.lock_timeout
+            while True:
+                try:
+                    handle.seek(0)
+                    if os.name == "nt":
+                        import msvcrt
+
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    else:
+                        import fcntl
+
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    locked = True
+                    break
+                except OSError as exc:
+                    if time.monotonic() >= deadline:
+                        raise SecretStoreError("等待密钥存储锁超时") from exc
+                    time.sleep(0.02)
+            yield
+        finally:
+            if locked:
+                try:
+                    handle.seek(0)
+                    if os.name == "nt":
+                        import msvcrt
+
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        import fcntl
+
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
+            handle.close()
+
+    @contextlib.contextmanager
+    def _locked(self):
         with self._lock:
+            with self._process_lock():
+                yield
+
+    def has(self, ref: str) -> bool:
+        with self._locked():
             return ref in self._read()
 
     def get(self, ref: str) -> str | None:
-        with self._lock:
+        with self._locked():
             encoded = self._read().get(ref)
         if not encoded:
             return None
@@ -182,13 +258,13 @@ class FileSecretStore:
     def set(self, ref: str, secret: str) -> None:
         cipher = _dpapi_protect(secret.encode("utf-8"))
         encoded = base64.b64encode(cipher).decode("ascii")
-        with self._lock:
+        with self._locked():
             data = self._read()
             data[ref] = encoded
             self._write(data)
 
     def delete(self, ref: str) -> None:
-        with self._lock:
+        with self._locked():
             data = self._read()
             if ref in data:
                 data.pop(ref, None)

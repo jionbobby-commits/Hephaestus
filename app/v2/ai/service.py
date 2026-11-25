@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any
 
@@ -13,6 +14,7 @@ from app.v2.ai.security import (
     new_key_ref,
     provider_label,
     provider_model,
+    resolve_base_url,
     validate_base_url,
 )
 from app.v2.ai.transport import HttpTransport, default_transport
@@ -28,6 +30,11 @@ from app.v2.contracts import (
 from app.v2.dataport import NotFoundError, SqlAlchemyDataPort
 
 logger = logging.getLogger("hephaestus.ai")
+
+# Outbound calls are capped per process. A local client cannot exhaust the
+# thread pool or open an unbounded number of provider connections.
+_MAX_CONCURRENT_CALLS = 4
+_CALL_SLOTS = threading.BoundedSemaphore(_MAX_CONCURRENT_CALLS)
 
 
 class AIProviderService:
@@ -61,7 +68,11 @@ class AIProviderService:
         label, base_url, model = self._validate(payload.kind, payload.label, payload.base_url, payload.model)
         if payload.is_default and not payload.enabled:
             raise AIError("invalid_request", "禁用的配置不能设为默认模型", status_code=422)
-        normalized = payload.model_copy(update={"label": label, "base_url": base_url, "model": model})
+        # The server owns secret locators. Older clients may still send
+        # key_ref, but it must never bind a provider to an arbitrary store key.
+        normalized = payload.model_copy(
+            update={"label": label, "base_url": base_url, "model": model, "key_ref": None}
+        )
         key_ref = None
         if payload.api_key is not None:
             key_ref = new_key_ref()
@@ -166,13 +177,13 @@ class AIProviderService:
 
     def list_models(self, provider_id: str) -> AIModelList:
         row, provider, adapter = self._resolve_for_use(provider_id)
-        models = adapter.list_models(provider)
+        models = self._call(lambda: adapter.list_models(provider))
         return AIModelList(provider_id=row.id, kind=row.kind, models=models)
 
     def test_connection(self, provider_id: str) -> AIConnectionTest:
         row, provider, adapter = self._resolve_for_use(provider_id)
         started = time.monotonic()
-        models = adapter.list_models(provider)
+        models = self._call(lambda: adapter.list_models(provider))
         latency = int((time.monotonic() - started) * 1000)
         return AIConnectionTest(
             ok=True,
@@ -187,7 +198,9 @@ class AIProviderService:
     def chat(self, request: AIChatRequest) -> AIChatResult:
         row, provider, adapter = self._resolve_for_use(request.provider_id)
         started = time.monotonic()
-        outcome = adapter.chat(provider, request.messages, request.system_prompt)
+        outcome = self._call(
+            lambda: adapter.chat(provider, request.messages, request.system_prompt)
+        )
         latency = int((time.monotonic() - started) * 1000)
         if len(outcome.content) > 20_000:
             raise AIError("invalid_provider_response", "模型响应超过长度上限", status_code=502, provider_id=row.id)
@@ -221,7 +234,9 @@ class AIProviderService:
         if row.kind not in SUPPORTED_KINDS:
             raise AIError("unsupported_provider", f"暂不支持 {row.kind} 类型的 AI Provider", status_code=422, provider_id=row.id)
         label = provider_label(row.label)
-        base_url = validate_base_url(row.kind, row.base_url, platform=self.platform)
+        base_url, resolved_ips = resolve_base_url(
+            row.kind, row.base_url, platform=self.platform
+        )
         model = provider_model(row.model)
         api_key = None
         if row.kind != "ollama":
@@ -238,6 +253,7 @@ class AIProviderService:
             model=model,
             params=public.params,
             api_key=api_key,
+            resolved_ips=tuple(resolved_ips),
         )
         return row, provider, adapter_for(row.kind, self.transport)
 
@@ -248,6 +264,20 @@ class AIProviderService:
         clean_model = provider_model(model)
         clean_base = validate_base_url(kind, base_url, platform=self.platform)
         return clean_label, clean_base, clean_model
+
+    @staticmethod
+    def _call(action):
+        if not _CALL_SLOTS.acquire(blocking=False):
+            raise AIError(
+                "too_many_requests",
+                "AI 请求并发过高，请稍后再试",
+                status_code=429,
+                retryable=True,
+            )
+        try:
+            return action()
+        finally:
+            _CALL_SLOTS.release()
 
     @staticmethod
     def _platform(value: str) -> str:

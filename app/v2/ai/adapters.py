@@ -33,6 +33,8 @@ class ResolvedProvider:
     model: str
     params: AIProviderParams
     api_key: str | None = field(default=None, repr=False)
+    # Exact addresses resolved during validation; the transport pins to these.
+    resolved_ips: tuple[str, ...] = ()
 
 
 @dataclass
@@ -64,6 +66,7 @@ class _AdapterBase:
                 json_body=payload,
                 timeout=float(provider.params.timeout_seconds),
                 max_bytes=self.max_bytes,
+                resolved_ips=provider.resolved_ips or None,
             )
         except TransportTimeout as exc:
             raise AIError(

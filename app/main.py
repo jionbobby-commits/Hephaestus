@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from app.database import create_db
 from app.release import VERSION, release_info
 from app.routers import notes, state
+from app.v2.ai.middleware import AISecurityMiddleware
 from app.v2.api import router as v2_router
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -21,6 +22,8 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Hephaestus", version=VERSION, lifespan=lifespan)
+# Local-only boundary for AI routes: Host/Origin validation and a body cap.
+app.add_middleware(AISecurityMiddleware)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.include_router(notes.router)
 app.include_router(state.router)
