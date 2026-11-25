@@ -27,6 +27,9 @@ test("shared JSON fixture matches the mobile contract", () => {
   assert.equal(note.is_favorite, true);
   assert.equal(note.revision, 3);
   assert.equal(fixture.provider.has_key, false);
+  assert.equal(fixture.provider.enabled, true);
+  assert.equal(fixture.provider.is_default, false);
+  assert.equal(fixture.provider.params.temperature, 0.7);
   assert.equal("key_ref" in fixture.provider, false);
 });
 
@@ -101,14 +104,23 @@ test("mobile DataPort settings and AI config never expose key_ref", async () => 
     assert.equal(changed.locale, "en");
 
     const provider = await port.createAiProvider({
-      kind: "ollama", label: "本地", base_url: "http://127.0.0.1:11434",
-      model: "qwen3", key_ref: "secret-ref",
+      kind: "custom", label: "在线 API", base_url: "https://api.example.com/v1",
+      model: "model-x", key_ref: "secret-ref", params: { max_tokens: 256 },
     });
     assert.equal(provider.has_key, true);
+    assert.equal(provider.enabled, true);
+    assert.equal(provider.is_default, false);
+    assert.equal(provider.params.max_tokens, 256);
     assert.equal("key_ref" in provider, false);
     const rows = await port.listAiProviders();
     assert.equal(rows.length, 1);
     assert.equal("key_ref" in rows[0], false);
+    await assert.rejects(
+      () => port.createAiProvider({
+        kind: "ollama", label: "本地", base_url: "http://127.0.0.1:11434", model: "qwen3",
+      }),
+      ValidationError,
+    );
   } finally {
     client.close();
   }

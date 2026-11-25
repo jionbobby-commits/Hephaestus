@@ -1,6 +1,6 @@
 # Hephaestus V2.0 文档
 
-本目录保存 V2.0 跨平台升级的阶段文档。阶段 A、B1、B2、B3 已完成；当前等待 **真实库迁移的单独授权**。真实库尚未迁移，AI、业务 UI 重构、安装包尚未开始。
+本目录保存 V2.0 跨平台升级的阶段文档。阶段 A、B1、B2、B3 与 C1 已完成并等待验收；当前等待 **真实库迁移的单独授权**。真实库尚未迁移；C1 只完成后端 AI Provider 架构，聊天 UI、人格、RAG、语音、附件送入模型、业务 UI 重构与安装包尚未开始。
 
 | 文档 | 内容 |
 |---|---|
@@ -24,20 +24,23 @@
 | [18-b3-migration-runbook.md](18-b3-migration-runbook.md) | B3 正式迁移预案（未执行） |
 | [19-b3-ui-acceptance.md](19-b3-ui-acceptance.md) | B3 迁移副本真实 UI 验收 |
 | [20-phase-b3-report.md](20-phase-b3-report.md) | B3 阶段总报告、测试结果、限制与下一步授权 |
+| [21-ai-provider-architecture.md](21-ai-provider-architecture.md) | C1 AI Provider 分层、适配器、密钥、SSRF、API 与限制 |
+| [22-phase-c1-report.md](22-phase-c1-report.md) | C1 阶段总报告、测试结果、改动文件与验收请求 |
 
 ## 当前状态
 
 - 分支：`feat/v2-cross-platform`
 - 基线：`main` / `3e341a5aeb486fb825fae2f71a0c9f7955ba040f`
-- 现有测试：88 passed（1 warning：Starlette httpx/TestClient 弃用提示）
-- 其中 B1 新增 14 项 Python 测试；B2 新增 10 项 Python 测试；B3 新增 4 项迁移测试（8 项迁移测试总计）
+- 现有测试：104 passed（1 warning：Starlette httpx/TestClient 弃用提示）
+- 其中 B1 新增 14 项 Python 测试；B2 新增 10 项 Python 测试；B3 新增 4 项迁移测试（8 项迁移测试总计）；C1 新增 16 项 AI 测试
 - 前端 DataPort Node 测试：8 passed；移动端 5 项 Node 契约测试
 - 真实用户数据：`frontend_state` 1 行（7 条笔记、4 个标签）；`notes` 表 0 行
 - 真实库 SHA256 仍为 e16595...；未执行真实迁移、未修改用户数据、未构建任何新平台安装包
 - B1 已在独立副本上完成迁移、完整性、幂等、备份恢复演练
 - B2 已完成四种数据状态、单写入源、冲突与断网保存、刷新/重开、重复提交、初始化失败恢复的真实窗口验证
 - B3 已完成真实数据只读盘点、独立备份、副本迁移、逐字段校验、幂等、失败恢复、回滚演练和迁移副本的真实 UI 验收
-- **真实库未迁移**；B3.4 迁移预案未执行
+- C1 已完成统一 AI Provider 抽象、Ollama/OpenAI 兼容适配器、密钥托管、SSRF 防护、/api/v2/ai/* 与 16 项测试；未实现聊天 UI 与模型自动读取笔记
+- **真实库未迁移**；B3.4 迁移预案未执行，C1 未修改真实库
 
 ## 待确认
 

@@ -110,8 +110,11 @@ def test_settings_and_ai_provider_do_not_store_secrets(port: SqlAlchemyDataPort)
     assert with_key.has_key is True
     dumped = with_key.model_dump()
     assert "key_ref" not in dumped and "api_key" not in dumped
-    with pytest.raises(ValidationError):
-        AIProviderConfigCreate(kind="openai", label="x", base_url="https://x", model="m", api_key="secret")
+    inline_key = AIProviderConfigCreate(
+        kind="openai", label="x", base_url="https://x", model="m", api_key="secret",
+    )
+    assert "secret" not in inline_key.model_dump_json()
+    assert inline_key.api_key is not None
 
     port.delete_ai_provider(with_key.id)
     assert len(port.list_ai_providers()) == 1

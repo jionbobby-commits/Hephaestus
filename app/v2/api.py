@@ -10,9 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from app.v2.ai.api import router as ai_router
 from app.v2.contracts import (
-    AIProviderConfigCreate,
-    AIProviderConfigRead,
     AppSettings,
     AppSettingsPatch,
     AttachmentRead,
@@ -239,28 +238,5 @@ def update_settings(payload: AppSettingsPatch, port: SqlAlchemyDataPort = Depend
         raise _schema_missing(exc) from exc
 
 
-@router.get("/ai/providers", response_model=list[AIProviderConfigRead])
-def list_ai_providers(port: SqlAlchemyDataPort = Depends(get_port)):
-    try:
-        return port.list_ai_providers()
-    except OperationalError as exc:
-        raise _schema_missing(exc) from exc
-
-
-@router.post("/ai/providers", response_model=AIProviderConfigRead, status_code=status.HTTP_201_CREATED)
-def create_ai_provider(payload: AIProviderConfigCreate, port: SqlAlchemyDataPort = Depends(get_port)):
-    try:
-        return port.create_ai_provider(payload)
-    except OperationalError as exc:
-        raise _schema_missing(exc) from exc
-
-
-@router.delete("/ai/providers/{provider_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_ai_provider(provider_id: str, port: SqlAlchemyDataPort = Depends(get_port)):
-    try:
-        port.delete_ai_provider(provider_id)
-    except NotFoundError as exc:
-        raise _not_found(exc) from exc
-    except OperationalError as exc:
-        raise _schema_missing(exc) from exc
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+# AI config/chat routes live in a child router so the public prefix stays /api/v2/ai.
+router.include_router(ai_router)

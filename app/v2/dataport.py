@@ -15,6 +15,8 @@ from sqlalchemy.orm import Session, selectinload
 from app.v2.contracts import (
     AIProviderConfigCreate,
     AIProviderConfigRead,
+    AIProviderConfigUpdate,
+    AIProviderParams,
     AppSettings,
     AppSettingsPatch,
     AttachmentRead,
@@ -55,6 +57,9 @@ class ConflictError(DataPortError):
 
 class InvalidReferenceError(DataPortError):
     pass
+
+
+_UNSET = object()
 
 
 def _new_id() -> str:
@@ -320,43 +325,133 @@ class SqlAlchemyDataPort:
 
     # ---------- AI provider configs (no secret here) ----------
 
-    def list_ai_providers(self) -> list[AIProviderConfigRead]:
-        rows = self.session.scalars(select(AIProviderConfigV2).order_by(AIProviderConfigV2.created_at)).all()
-        return [self._provider_public(row) for row in rows]
-
     @staticmethod
-    def _provider_public(row: AIProviderConfigV2) -> AIProviderConfigRead:
+    def _provider_extra(row: AIProviderConfigV2) -> dict[str, Any]:
+        try:
+            value = json.loads(row.extra_json or "{}")
+        except (TypeError, json.JSONDecodeError):
+            value = {}
+        return value if isinstance(value, dict) else {}
+
+    @classmethod
+    def _provider_meta(cls, row: AIProviderConfigV2) -> tuple[dict[str, Any], bool, bool, AIProviderParams]:
+        extra = cls._provider_extra(row)
+        raw_params = extra.get("params", {})
+        try:
+            params = AIProviderParams.model_validate(raw_params if isinstance(raw_params, dict) else {})
+        except Exception:
+            params = AIProviderParams()
+        return extra, bool(extra.get("enabled", True)), bool(extra.get("is_default", False)), params
+
+    @classmethod
+    def provider_public(cls, row: AIProviderConfigV2, *, has_key: bool | None = None) -> AIProviderConfigRead:
+        _extra, enabled, is_default, params = cls._provider_meta(row)
         return AIProviderConfigRead(
             id=row.id,
             kind=row.kind,
             label=row.label,
             base_url=row.base_url,
             model=row.model,
-            has_key=bool(row.key_ref),
+            enabled=enabled,
+            is_default=is_default,
+            params=params,
+            has_key=bool(row.key_ref) if has_key is None else has_key,
             created_at=row.created_at,
             updated_at=row.updated_at,
         )
 
-    def create_ai_provider(self, payload: AIProviderConfigCreate) -> AIProviderConfigRead:
+    def list_ai_provider_rows(self) -> list[AIProviderConfigV2]:
+        return list(self.session.scalars(select(AIProviderConfigV2).order_by(AIProviderConfigV2.created_at)).all())
+
+    def get_ai_provider_row(self, provider_id: str) -> AIProviderConfigV2:
+        row = self.session.get(AIProviderConfigV2, provider_id)
+        if row is None:
+            raise NotFoundError(f"AI 配置不存在: {provider_id}")
+        return row
+
+    def list_ai_providers(self) -> list[AIProviderConfigRead]:
+        return [self.provider_public(row) for row in self.list_ai_provider_rows()]
+
+    def create_ai_provider(self, payload: AIProviderConfigCreate, *, key_ref: str | None = None) -> AIProviderConfigRead:
         now = utc_now_iso()
+        extra = {
+            "enabled": payload.enabled,
+            "is_default": payload.is_default,
+            "params": payload.params.model_dump(),
+        }
+        # key_ref is deprecated in the public contract; read storage directly so
+        # old direct-DataPort callers keep working without emitting warnings.
+        legacy_ref = payload.__dict__.get("key_ref")
+        effective_ref = key_ref if key_ref is not None else legacy_ref
         row = AIProviderConfigV2(
             id=_new_id(),
             kind=payload.kind,
             label=payload.label,
             base_url=payload.base_url,
             model=payload.model,
-            key_ref=payload.key_ref,
+            key_ref=effective_ref,
             created_at=now,
             updated_at=now,
+            extra_json=json.dumps(extra, ensure_ascii=False),
         )
         self.session.add(row)
         self.session.commit()
-        return self._provider_public(row)
+        return self.provider_public(row, has_key=bool(effective_ref))
+
+    def update_ai_provider(
+        self,
+        provider_id: str,
+        payload: AIProviderConfigUpdate,
+        *,
+        key_ref: str | None | object = _UNSET,
+        has_key: bool | None = None,
+    ) -> AIProviderConfigRead:
+        row = self.get_ai_provider_row(provider_id)
+        fields = payload.model_fields_set
+        for name in ("kind", "label", "base_url", "model"):
+            if name in fields:
+                setattr(row, name, getattr(payload, name))
+        extra = self._provider_extra(row)
+        if "enabled" in fields:
+            extra["enabled"] = bool(payload.enabled)
+        if "is_default" in fields:
+            extra["is_default"] = bool(payload.is_default)
+        if "params" in fields and payload.params is not None:
+            extra["params"] = payload.params.model_dump()
+        if key_ref is not _UNSET:
+            row.key_ref = key_ref  # type: ignore[assignment]
+        row.extra_json = json.dumps(extra, ensure_ascii=False)
+        row.updated_at = utc_now_iso()
+        self.session.commit()
+        return self.provider_public(row, has_key=has_key)
+
+    def set_ai_defaults(self, default_id: str | None) -> None:
+        """Make exactly one provider the default and mirror its model in settings.
+
+        Unknown extra_json keys and secrets are preserved. A disabled provider
+        can never remain the default.
+        """
+        rows = self.list_ai_provider_rows()
+        chosen: AIProviderConfigV2 | None = None
+        for row in rows:
+            extra = self._provider_extra(row)
+            enabled = bool(extra.get("enabled", True))
+            is_default = row.id == default_id and enabled
+            extra["is_default"] = is_default
+            row.extra_json = json.dumps(extra, ensure_ascii=False)
+            if is_default:
+                chosen = row
+        settings = self.session.get(AppSettingV2, "default_model")
+        value = chosen.model if chosen is not None else None
+        if settings is None:
+            settings = AppSettingV2(key="default_model", value_json="", updated_at=utc_now_iso())
+            self.session.add(settings)
+        settings.value_json = json.dumps(value, ensure_ascii=False)
+        settings.updated_at = utc_now_iso()
+        self.session.commit()
 
     def delete_ai_provider(self, provider_id: str) -> None:
-        row = self.session.get(AIProviderConfigV2, provider_id)
-        if row is None:
-            raise NotFoundError(f"AI 配置不存在: {provider_id}")
+        row = self.get_ai_provider_row(provider_id)
         self.session.delete(row)
         self.session.commit()
 

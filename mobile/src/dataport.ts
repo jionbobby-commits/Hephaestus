@@ -2,6 +2,7 @@
 import {
   type AIProviderConfig,
   type AIProviderCreateInput,
+  type AIProviderParams,
   type AppSettings,
   type AppSettingsPatch,
   type Attachment,
@@ -18,6 +19,7 @@ import {
   InvalidReferenceError,
   NotFoundError,
   ValidationError,
+  DEFAULT_AI_PROVIDER_PARAMS,
   coalesceSettings,
   htmlToText,
   newId,
@@ -43,6 +45,7 @@ interface AttachmentRow {
 interface ProviderRow {
   id: string; kind: AIProviderConfig["kind"]; label: string; base_url: string;
   model: string; key_ref: string | null; created_at: string; updated_at: string;
+  extra_json: string | null;
 }
 
 function tagOf(row: TagRow): Tag {
@@ -63,6 +66,52 @@ function noteOf(row: NoteRow, tags: Tag[], attachments: Attachment[]): Note {
     is_favorite: Boolean(row.is_favorite), is_trashed: Boolean(row.is_trashed),
     favorited_at: row.favorited_at, trashed_at: row.trashed_at,
     created_at: row.created_at, updated_at: row.updated_at, revision: Number(row.revision),
+  };
+}
+
+function providerParamsOf(value: unknown): AIProviderParams {
+  const raw = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const numberOr = (key: keyof AIProviderParams, fallback: number): number => {
+    const candidate = raw[key];
+    return typeof candidate === "number" && Number.isFinite(candidate) ? candidate : fallback;
+  };
+  return {
+    temperature: numberOr("temperature", DEFAULT_AI_PROVIDER_PARAMS.temperature),
+    max_tokens: numberOr("max_tokens", DEFAULT_AI_PROVIDER_PARAMS.max_tokens),
+    top_p: numberOr("top_p", DEFAULT_AI_PROVIDER_PARAMS.top_p),
+    timeout_seconds: numberOr("timeout_seconds", DEFAULT_AI_PROVIDER_PARAMS.timeout_seconds),
+  };
+}
+
+function validateProviderParams(input?: Partial<AIProviderParams>): AIProviderParams {
+  const params = { ...DEFAULT_AI_PROVIDER_PARAMS, ...(input ?? {}) };
+  if (typeof params.temperature !== "number" || !Number.isFinite(params.temperature) || params.temperature < 0 || params.temperature > 2) {
+    throw new ValidationError("temperature 必须在 0 到 2 之间");
+  }
+  if (!Number.isInteger(params.max_tokens) || params.max_tokens < 1 || params.max_tokens > 8192) {
+    throw new ValidationError("max_tokens 必须是 1 到 8192 的整数");
+  }
+  if (typeof params.top_p !== "number" || !Number.isFinite(params.top_p) || params.top_p < 0 || params.top_p > 1) {
+    throw new ValidationError("top_p 必须在 0 到 1 之间");
+  }
+  if (typeof params.timeout_seconds !== "number" || !Number.isFinite(params.timeout_seconds) || params.timeout_seconds < 1 || params.timeout_seconds > 120) {
+    throw new ValidationError("timeout_seconds 必须在 1 到 120 之间");
+  }
+  return params;
+}
+
+function providerOf(row: ProviderRow): AIProviderConfig {
+  let extra: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(row.extra_json || "{}");
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) extra = parsed as Record<string, unknown>;
+  } catch { /* legacy rows default below */ }
+  return {
+    id: row.id, kind: row.kind, label: row.label, base_url: row.base_url, model: row.model,
+    enabled: extra.enabled !== false,
+    is_default: extra.is_default === true,
+    params: providerParamsOf(extra.params),
+    has_key: Boolean(row.key_ref), created_at: row.created_at, updated_at: row.updated_at,
   };
 }
 
@@ -368,13 +417,11 @@ export class SqliteDataPort {
 
   async listAiProviders(): Promise<AIProviderConfig[]> {
     const rows = await this.client.all<ProviderRow>("SELECT * FROM v2_ai_providers ORDER BY created_at, id");
-    return rows.map((row) => ({
-      id: row.id, kind: row.kind, label: row.label, base_url: row.base_url, model: row.model,
-      has_key: Boolean(row.key_ref), created_at: row.created_at, updated_at: row.updated_at,
-    }));
+    return rows.map(providerOf);
   }
 
   async createAiProvider(input: AIProviderCreateInput): Promise<AIProviderConfig> {
+    if (input.kind === "ollama") throw new ValidationError("移动端不支持 Ollama，请使用在线 API");
     if (!input.label.trim()) throw new ValidationError("配置名称不能为空");
     if (!/^https?:\/\//.test(input.base_url)) throw new ValidationError("base_url 必须是 http(s) URL");
     if (!input.model.trim()) throw new ValidationError("模型不能为空");
@@ -382,15 +429,17 @@ export class SqliteDataPort {
     const row: ProviderRow = {
       id: newId(), kind: input.kind, label: input.label.trim(), base_url: input.base_url.trim(),
       model: input.model.trim(), key_ref: input.key_ref ?? null, created_at: now, updated_at: now,
+      extra_json: JSON.stringify({
+        enabled: input.enabled !== false,
+        is_default: false,
+        params: validateProviderParams(input.params),
+      }),
     };
     await this.client.run(
-      "INSERT INTO v2_ai_providers (id,kind,label,base_url,model,key_ref,created_at,updated_at,extra_json) VALUES (?,?,?,?,?,?,?,?,'{}')",
-      [row.id, row.kind, row.label, row.base_url, row.model, row.key_ref, row.created_at, row.updated_at],
+      "INSERT INTO v2_ai_providers (id,kind,label,base_url,model,key_ref,created_at,updated_at,extra_json) VALUES (?,?,?,?,?,?,?,?,?)",
+      [row.id, row.kind, row.label, row.base_url, row.model, row.key_ref, row.created_at, row.updated_at, row.extra_json],
     );
-    return {
-      id: row.id, kind: row.kind, label: row.label, base_url: row.base_url, model: row.model,
-      has_key: Boolean(row.key_ref), created_at: row.created_at, updated_at: row.updated_at,
-    };
+    return providerOf(row);
   }
 
   async deleteAiProvider(providerId: string): Promise<void> {

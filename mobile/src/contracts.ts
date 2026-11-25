@@ -68,12 +68,29 @@ export interface AppSettings {
   default_model: string | null;
 }
 
+export interface AIProviderParams {
+  temperature: number;
+  max_tokens: number;
+  top_p: number;
+  timeout_seconds: number;
+}
+
+export const DEFAULT_AI_PROVIDER_PARAMS: AIProviderParams = {
+  temperature: 0.7,
+  max_tokens: 1024,
+  top_p: 1.0,
+  timeout_seconds: 30,
+};
+
 export interface AIProviderConfig {
   id: string;
   kind: ProviderKind;
   label: string;
   base_url: string;
   model: string;
+  enabled: boolean;
+  is_default: boolean;
+  params: AIProviderParams;
   has_key: boolean;
   created_at: string;
   updated_at: string;
@@ -124,7 +141,10 @@ export interface AIProviderCreateInput {
   label: string;
   base_url: string;
   model: string;
+  /** Opaque locator only; raw provider secrets never live in the frontend. */
   key_ref?: string | null;
+  enabled?: boolean;
+  params?: Partial<AIProviderParams>;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {

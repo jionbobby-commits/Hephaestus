@@ -91,11 +91,17 @@ locale 允许：zh-CN、en、ja、es、fr、ru、ar、fa、he、tr。ar/fa/he �
 | label | string 1..64 | 用户可见名称 |
 | base_url | string 1..2048 | 服务地址 |
 | model | string 1..200 | 模型名 |
-| key_ref | string 或 null | 仅内部存储；**读取契约不包含此字段** |
+| enabled | bool | 是否启用；默认 true |
+| is_default | bool | 是否为默认 Provider；最多一个启用项为 true |
+| params | object | temperature 0..2、max_tokens 1..8192、top_p 0..1、timeout_seconds 1..120 |
 | has_key | bool | 读取时表示是否已配置密钥 |
+| key_ref | string 或 null | 仅内部存储的随机定位符；**读取契约不包含此字段** |
+| api_key | string | 仅写入；请求体字段，服务端转存系统密钥库后不落库 |
 | created_at / updated_at | ISO UTC | 时间 |
 
-移动端首版不包含 Ollama；ollama 仍保留在契约中，供桌面端后续阶段使用。
+enabled、is_default、params 保存在既有 extra_json，不新增列。旧 key_ref 创建字段保留兼容，但服务端不信任调用方提供的密钥定位符。
+
+移动端不允许 Ollama：TypeScript DataPort 与后端 X-Hephaestus-Platform: mobile 都会拒绝创建或使用 Ollama；ollama 仍保留在共享枚举中，供桌面端使用。
 
 ## 3. 删除、恢复与级联
 

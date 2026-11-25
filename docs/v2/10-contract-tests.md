@@ -73,12 +73,15 @@ npm run typecheck
 | 布尔存储 | SQLAlchemy Boolean | 0/1 转换 | 一致 |
 | revision 冲突 | ConflictError | ConflictError | 一致 |
 | 标签引用不存在 | InvalidReferenceError | InvalidReferenceError | 一致 |
-| key_ref 不暴露 | _provider_public | 显式对象 | 一致 |
+| key_ref 不暴露 | provider_public / 读取契约 | providerOf 显式对象 | 一致 |
+| enabled/is_default/params | extra_json + AIProviderParams | extra_json + AIProviderParams | 一致 |
+| 移动端禁止 Ollama | X-Hephaestus-Platform 校验 | createAiProvider 拒绝 | 一致 |
 | 分页默认/上限 | 20 / 100 | 20 / 100 | 一致 |
 | 回收站默认过滤 | trashed=false | trashed=false | 一致 |
 
 ## 5. 未覆盖
 
+- AI 适配器与真实网络调用在 C1 test_v2_ai.py 中用 FakeTransport 覆盖；移动端只验证契约与本地 DataPort，不含真实 HTTP。
 - Capacitor 原生 SQLite 适配器（阶段 G）。
 - 多进程/多设备并发写同一 SQLite 文件。
 - 附件二进制上传与引用计数。

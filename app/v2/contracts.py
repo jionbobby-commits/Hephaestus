@@ -13,7 +13,7 @@ from html.parser import HTMLParser
 from datetime import datetime, timezone
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, StringConstraints, model_validator
 
 Locale = Literal["zh-CN", "en", "ja", "es", "fr", "ru", "ar", "fa", "he", "tr"]
 Theme = Literal["light", "dark", "system"]
@@ -184,14 +184,60 @@ class AppSettingsPatch(BaseModel):
 AIProviderKind = Literal["ollama", "openai", "anthropic", "gemini", "deepseek", "qwen", "custom"]
 
 
+class AIProviderParams(BaseModel):
+    """Generation limits shared by every provider adapter.
+
+    They are deliberately small and provider-neutral. Adapter-specific knobs
+    belong in the adapter, not in the shared JSON contract.
+    """
+    model_config = ConfigDict(extra="forbid")
+    temperature: float = Field(default=0.7, ge=0, le=2)
+    max_tokens: int = Field(default=1024, ge=1, le=8192)
+    top_p: float = Field(default=1.0, ge=0, le=1)
+    timeout_seconds: float = Field(default=30.0, ge=1, le=120)
+
+
 class AIProviderConfigCreate(BaseModel):
-    """Configuration only; the secret is stored in OS keyring under key_ref."""
+    """Provider configuration; secrets travel only in the create/update body.
+
+    key_ref is accepted for old F2 clients but is ignored: the server owns key
+    references and never accepts a caller-supplied secret locator.
+    """
     model_config = ConfigDict(extra="forbid")
     kind: AIProviderKind
     label: str = Field(min_length=1, max_length=64)
     base_url: str = Field(min_length=1, max_length=2048)
     model: str = Field(min_length=1, max_length=200)
-    key_ref: str | None = Field(default=None, min_length=1, max_length=255)
+    key_ref: str | None = Field(default=None, min_length=1, max_length=255, deprecated=True)
+    api_key: SecretStr | None = None
+    enabled: bool = True
+    is_default: bool = False
+    params: AIProviderParams = Field(default_factory=AIProviderParams)
+
+
+class AIProviderConfigUpdate(BaseModel):
+    """Partial provider update. Omitted fields stay unchanged."""
+    model_config = ConfigDict(extra="forbid")
+    kind: AIProviderKind | None = None
+    label: str | None = Field(default=None, min_length=1, max_length=64)
+    base_url: str | None = Field(default=None, min_length=1, max_length=2048)
+    model: str | None = Field(default=None, min_length=1, max_length=200)
+    api_key: SecretStr | None = None
+    clear_api_key: bool = False
+    enabled: bool | None = None
+    is_default: bool | None = None
+    params: AIProviderParams | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> "AIProviderConfigUpdate":
+        if not self.model_fields_set:
+            raise ValueError("至少需要修改一个字段")
+        if self.api_key is not None and self.clear_api_key:
+            raise ValueError("api_key 与 clear_api_key 不能同时使用")
+        for name in ("kind", "label", "base_url", "model", "enabled", "is_default", "params"):
+            if name in self.model_fields_set and getattr(self, name) is None:
+                raise ValueError(f"{name} 不能为 null")
+        return self
 
 
 class AIProviderConfigRead(BaseModel):
@@ -201,9 +247,83 @@ class AIProviderConfigRead(BaseModel):
     label: str
     base_url: str
     model: str
+    enabled: bool
+    is_default: bool
+    params: AIProviderParams
     has_key: bool
     created_at: IsoUtc
     updated_at: IsoUtc
+
+
+class AIModelInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    name: str
+    size_bytes: int | None = Field(default=None, ge=0)
+    modified_at: str | None = None
+    details: dict[str, str] = Field(default_factory=dict)
+
+
+class AIModelList(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider_id: NoteId
+    kind: AIProviderKind
+    models: list[AIModelInfo]
+
+
+class AIConnectionTest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ok: bool
+    provider_id: NoteId
+    kind: AIProviderKind
+    model: str
+    model_count: int = Field(ge=0)
+    latency_ms: int = Field(ge=0)
+    message: str
+
+
+class AIChatMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    role: Literal["system", "user", "assistant"]
+    content: str = Field(min_length=1, max_length=20_000)
+
+
+class AIChatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider_id: NoteId
+    messages: list[AIChatMessage] = Field(min_length=1, max_length=50)
+    system_prompt: str | None = Field(default=None, max_length=20_000)
+
+
+class AIChatUsage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    prompt_tokens: int | None = Field(default=None, ge=0)
+    completion_tokens: int | None = Field(default=None, ge=0)
+    total_tokens: int | None = Field(default=None, ge=0)
+
+
+class AIChatResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider_id: NoteId
+    model: str
+    message: AIChatMessage
+    finish_reason: str | None = None
+    usage: AIChatUsage | None = None
+    latency_ms: int = Field(ge=0)
+
+
+class AIErrorInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    code: str
+    message: str
+    provider_id: str | None = None
+    retryable: bool = False
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class AIErrorResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    error: AIErrorInfo
 
 
 class SnapshotSummary(BaseModel):

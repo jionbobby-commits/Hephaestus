@@ -39,7 +39,8 @@ UI / API 路由
 设置与 AI 配置：
 
 - get_settings() / update_settings(AppSettingsPatch)
-- list_ai_providers() / create_ai_provider(AIProviderConfigCreate) / delete_ai_provider(id)
+- list_ai_providers() / get_ai_provider_row(id) / create_ai_provider(AIProviderConfigCreate) / update_ai_provider(id, AIProviderConfigUpdate) / delete_ai_provider(id)
+- set_ai_defaults(default_id)：切换默认 Provider，并同步 settings.default_model
 
 错误类型：
 
@@ -89,8 +90,11 @@ UI / API 路由
 | GET/POST | /tags | 标签列表/创建 |
 | PATCH/DELETE | /tags/{id} | 更新/删除标签 |
 | GET/PATCH | /settings | 设置读取/局部更新 |
-| GET/POST | /ai/providers | AI 配置列表/创建（不返回 key_ref） |
-| DELETE | /ai/providers/{id} | 删除 AI 配置 |
+| GET/POST | /ai/providers | AI 配置列表/创建（不返回 key_ref 或 api_key） |
+| PATCH/DELETE | /ai/providers/{id} | 更新/删除 AI 配置；支持密钥轮换与清除 |
+| GET | /ai/providers/{id}/models | 列出该 Provider 可用模型 |
+| POST | /ai/providers/{id}/test | 连接测试，返回模型数量与耗时 |
+| POST | /ai/chat | 显式文本聊天；不自动读取笔记或附件 |
 
 兼容性：
 
@@ -98,6 +102,18 @@ UI / API 路由
 - /api/state 继续读写 frontend_state，不经过 V2 表。
 - 应用启动不会创建 v2_* 表；未迁移时 /api/v2 返回 503，旧接口仍可用。
 - /api/v2/status 只读，不创建表、不迁移、不写 frontend_state。
+
+### 4.0 AI Provider 服务
+
+AI 端点由 app/v2/ai/api.py 的子路由承接，前缀仍是 /api/v2/ai。服务层是 app/v2/ai/service.py，适配器是 app/v2/ai/adapters.py，密钥存储是 app/v2/ai/secrets.py。
+
+- 配置读取只返回 has_key；明文密钥只在创建/更新请求体中出现一次，随后存系统密钥库。
+- enabled、is_default、params 存 v2_ai_providers.extra_json，不改表结构。
+- 默认 Provider 被删除或禁用时，自动选择第一个 enabled 项，并同步 settings.default_model。
+- /ai/* 默认只允许本机客户端；移动端请求头 X-Hephaestus-Platform: mobile 会拒绝 Ollama。
+- Base URL 在创建和使用前都做 SSRF 校验；传输层禁用代理与重定向并限制响应大小。
+- 统一错误为 {"error": {...}}，包含 code、message、retryable，不含密钥或请求头。
+- C1 只做文本、非流式调用；不自动发送任何用户内容。
 
 ### 4.1 前端如何选择接口
 
@@ -123,6 +139,6 @@ UI / API 路由
 
 - 附件上传、下载、存储、引用计数属于阶段 E。
 - Capacitor 原生 SQLite 适配器、真实 Android/iOS 壳属于阶段 G。
-- AI 调用、流式响应、密钥托管属于阶段 C。
-- 前端已接入 /api/v2（B2）；真实用户库仍未迁移，因此当前真实运行仍走 /api/state。
+- C1 已完成 AI Provider 配置、密钥托管、模型列表、连接测试和非流式文本聊天；流式响应、聊天 UI、人格、RAG、语音属于 C2 及后续阶段。
+- 前端已接入 /api/v2（B2）；真实用户库仍未迁移，因此当前真实运行仍走 /api/state。AI 端点未接入现有界面。
 - 真实库迁移、冲突中心、附件与移动端壳分别属于后续阶段，需单独授权。
