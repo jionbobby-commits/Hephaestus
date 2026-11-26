@@ -28,6 +28,7 @@
 | [22-phase-c1-report.md](22-phase-c1-report.md) | C1 阶段总报告、测试结果、改动文件与验收请求 |
 | [23-ai-security-audit.md](23-ai-security-audit.md) | C1.1 AI Provider 安全复核、风险分级、修复与残余风险 |
 | [24-c2-chat-architecture.md](24-c2-chat-architecture.md) | C2 对话数据模型、Capability Token、流式协议、API 与限制 |
+| [25-phase-c2-report.md](25-phase-c2-report.md) | C2 阶段总报告、18 项要求覆盖、测试结果与验收请求 |
 
 ## 当前状态
 
