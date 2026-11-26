@@ -99,6 +99,42 @@ class AIProviderConfigV2(V2Base):
     extra_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
 
 
+class ConversationV2(V2Base):
+    """A chat thread. Physical schema is additive for C2."""
+
+    __tablename__ = "v2_conversations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    provider_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    model: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    archived_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    extra_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+
+
+class MessageV2(V2Base):
+    """One persisted turn. Assistant placeholders exist while streaming."""
+
+    __tablename__ = "v2_messages"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("v2_conversations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="complete")
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    client_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+
 class SchemaMigrationV2(V2Base):
     __tablename__ = "v2_schema_migrations"
 

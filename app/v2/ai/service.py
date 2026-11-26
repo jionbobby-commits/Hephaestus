@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from contextlib import contextmanager
+from dataclasses import replace
 from typing import Any
 
 from app.v2.ai.adapters import ResolvedProvider, adapter_for
@@ -216,6 +218,28 @@ class AIProviderService:
             latency_ms=latency,
         )
 
+    def resolve_for_chat(self, provider_id: str, model: str | None = None):
+        """Resolve a provider once, before a long-running generation starts."""
+        row, provider, adapter = self._resolve_for_use(provider_id)
+        if model is not None and model.strip() and model.strip() != provider.model:
+            provider = replace(provider, model=provider_model(model))
+        return row, provider, adapter
+
+    @contextmanager
+    def call_slot(self):
+        """Hold one of the bounded outbound-call slots for a whole stream."""
+        if not _CALL_SLOTS.acquire(blocking=False):
+            raise AIError(
+                "too_many_requests",
+                "AI 请求并发过高，请稍后再试",
+                status_code=429,
+                retryable=True,
+            )
+        try:
+            yield
+        finally:
+            _CALL_SLOTS.release()
+
     # ---------- helpers ----------
 
     def _row(self, provider_id: str):
@@ -259,7 +283,7 @@ class AIProviderService:
 
     def _validate(self, kind: str, label: str, base_url: str, model: str) -> tuple[str, str, str]:
         if kind not in SUPPORTED_KINDS:
-            raise AIError("unsupported_provider", f"C1 暂不支持 {kind} 类型的 AI Provider", status_code=422)
+            raise AIError("unsupported_provider", f"C2 暂不支持 {kind} 类型的 AI Provider", status_code=422)
         clean_label = provider_label(label)
         clean_model = provider_model(model)
         clean_base = validate_base_url(kind, base_url, platform=self.platform)

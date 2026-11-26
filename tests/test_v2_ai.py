@@ -12,6 +12,12 @@ from sqlalchemy.pool import StaticPool
 
 from app.main import app
 from app.v2.ai.api import get_ai_secret_store, get_ai_transport
+from app.v2.ai.capability import (
+    CAPABILITY_HEADER,
+    configure_capability_token,
+    current_token,
+    reset_for_tests,
+)
 from app.v2.ai.secrets import InMemorySecretStore
 from app.v2.ai.transport import HttpResponse, TransportConnectionError, TransportTimeout
 from app.v2.db import configure_sqlite, create_v2_db, get_v2_session
@@ -71,6 +77,8 @@ def ai_client():
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     store = InMemorySecretStore()
     transport = FakeTransport()
+    configure_capability_token("test-capability-token-0123456789abcdef0123456789abcdef")
+    token_headers = {CAPABILITY_HEADER: current_token()}
 
     def override_session():
         with factory() as session:
@@ -80,12 +88,13 @@ def ai_client():
     app.dependency_overrides[get_ai_secret_store] = lambda: store
     app.dependency_overrides[get_ai_transport] = lambda: transport
     try:
-        with TestClient(app) as client:
+        with TestClient(app, headers=token_headers) as client:
             yield client, store, transport
     finally:
         app.dependency_overrides.pop(get_v2_session, None)
         app.dependency_overrides.pop(get_ai_secret_store, None)
         app.dependency_overrides.pop(get_ai_transport, None)
+        reset_for_tests()
         engine.dispose()
 
 
@@ -320,10 +329,12 @@ def test_provider_config_survives_restart(tmp_path):
     app.dependency_overrides[get_v2_session] = override_session
     app.dependency_overrides[get_ai_secret_store] = lambda: store
     app.dependency_overrides[get_ai_transport] = lambda: transport
+    configure_capability_token("restart-capability-token-0123456789abcdef0123456789")
+    token_headers = {CAPABILITY_HEADER: current_token()}
     try:
-        with TestClient(app) as first:
+        with TestClient(app, headers=token_headers) as first:
             created = create_provider(first, api_key="sk-persist-123")
-        with TestClient(app) as second:
+        with TestClient(app, headers=token_headers) as second:
             listed = second.get("/api/v2/ai/providers")
             assert listed.status_code == 200
             assert listed.json()[0]["id"] == created["id"]
@@ -336,4 +347,5 @@ def test_provider_config_survives_restart(tmp_path):
         app.dependency_overrides.pop(get_v2_session, None)
         app.dependency_overrides.pop(get_ai_secret_store, None)
         app.dependency_overrides.pop(get_ai_transport, None)
+        reset_for_tests()
         engine.dispose()

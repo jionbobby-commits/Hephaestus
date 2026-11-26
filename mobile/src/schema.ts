@@ -72,6 +72,38 @@ CREATE TABLE IF NOT EXISTS v2_ai_providers (
   extra_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS v2_conversations (
+  id VARCHAR(64) NOT NULL PRIMARY KEY,
+  title VARCHAR(200) NOT NULL,
+  provider_id VARCHAR(64),
+  model VARCHAR(200) NOT NULL DEFAULT '',
+  created_at VARCHAR(40) NOT NULL,
+  updated_at VARCHAR(40) NOT NULL,
+  archived_at VARCHAR(40),
+  revision INTEGER NOT NULL DEFAULT 1,
+  extra_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS v2_messages (
+  id VARCHAR(64) NOT NULL PRIMARY KEY,
+  conversation_id VARCHAR(64) NOT NULL,
+  role VARCHAR(16) NOT NULL,
+  content TEXT NOT NULL DEFAULT '',
+  status VARCHAR(16) NOT NULL DEFAULT 'complete',
+  sequence INTEGER NOT NULL DEFAULT 1,
+  client_id VARCHAR(64),
+  error_code VARCHAR(64),
+  created_at VARCHAR(40) NOT NULL,
+  updated_at VARCHAR(40) NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 1,
+  FOREIGN KEY (conversation_id) REFERENCES v2_conversations(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_v2_messages_conversation
+  ON v2_messages(conversation_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_v2_messages_client
+  ON v2_messages(conversation_id, client_id);
+
 CREATE TABLE IF NOT EXISTS v2_schema_migrations (
   version INTEGER NOT NULL PRIMARY KEY,
   applied_at VARCHAR(40) NOT NULL,

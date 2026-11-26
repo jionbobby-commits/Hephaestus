@@ -96,6 +96,93 @@ export interface AIProviderConfig {
   updated_at: string;
 }
 
+export type MessageStatus = "pending" | "streaming" | "complete" | "stopped" | "error";
+export type MessageRole = "user" | "assistant" | "system";
+
+export interface Conversation {
+  id: string;
+  title: string;
+  provider_id: string | null;
+  model: string;
+  system_prompt: string | null;
+  created_at: string;
+  updated_at: string;
+  archived_at: string | null;
+  revision: number;
+  message_count: number;
+}
+
+export interface ConversationPage {
+  items: Conversation[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface Message {
+  id: string;
+  conversation_id: string;
+  role: MessageRole;
+  content: string;
+  status: MessageStatus;
+  sequence: number;
+  client_id: string | null;
+  error_code: string | null;
+  created_at: string;
+  updated_at: string;
+  revision: number;
+}
+
+export interface MessagePage {
+  items: Message[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface ConversationDetail {
+  conversation: Conversation;
+  messages: Message[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface ConversationCreateInput {
+  provider_id: string;
+  model?: string | null;
+  title?: string;
+  system_prompt?: string | null;
+}
+
+export interface ConversationPatchInput {
+  title?: string;
+  provider_id?: string;
+  model?: string;
+  system_prompt?: string | null;
+  archived?: boolean;
+  revision?: number;
+}
+
+export interface SendMessageInput {
+  content: string;
+  client_message_id?: string | null;
+  stream?: boolean;
+}
+
+export interface ChatReply {
+  conversation: Conversation;
+  user_message: Message;
+  assistant_message: Message;
+  finish_reason: string | null;
+  usage: { prompt_tokens?: number | null; completion_tokens?: number | null; total_tokens?: number | null } | null;
+}
+
+export interface StopGenerationResult {
+  stopped: boolean;
+  message: Message | null;
+}
+
 export interface ListNotesOptions {
   query?: string;
   tag_id?: string;

@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from app.database import create_db
 from app.release import VERSION, release_info
 from app.routers import notes, state
+from app.v2.ai.capability import ensure_capability_token
 from app.v2.ai.middleware import AISecurityMiddleware
 from app.v2.ai.validation import validation_exception_handler
 from app.v2.api import router as v2_router
@@ -19,6 +20,9 @@ STATIC_DIR = BASE_DIR / "static"
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    # C2.1: the token lives only in memory. Desktop sets it before importing
+    # this module; web deployments must provision it explicitly.
+    ensure_capability_token()
     create_db()
     yield
 

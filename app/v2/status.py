@@ -31,6 +31,7 @@ REQUIRED_V2_TABLES = {
     "v2_schema_migrations",
     "v2_import_meta",
 }
+CHAT_TABLES = {"v2_conversations", "v2_messages"}
 MIGRATION_VERSION = 1
 
 
@@ -73,6 +74,7 @@ def _v2_status(session: Session, tables: set[str]) -> dict[str, Any]:
         "tag_count": None,
         "explicit_status": None,
         "error": None,
+        "chat_schema_ready": CHAT_TABLES.issubset(tables),
     }
     if not status["schema_ready"]:
         return status

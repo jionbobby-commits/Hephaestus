@@ -22,6 +22,12 @@ from sqlalchemy.pool import StaticPool
 from app.main import app
 from app.v2.ai import service as service_module
 from app.v2.ai.api import get_ai_secret_store, get_ai_transport
+from app.v2.ai.capability import (
+    CAPABILITY_HEADER,
+    configure_capability_token,
+    current_token,
+    reset_for_tests,
+)
 from app.v2.ai.errors import AIError
 from app.v2.ai.secrets import FileSecretStore, InMemorySecretStore, SecretStoreError
 from app.v2.ai.security import redact_secret, resolve_base_url, validate_base_url
@@ -93,6 +99,8 @@ def ai_client(monkeypatch):
     factory = sessionmaker(bind=engine, expire_on_commit=False)
     store = InMemorySecretStore()
     transport = FakeTransport()
+    configure_capability_token("test-capability-token-0123456789abcdef0123456789abcdef")
+    token_headers = {CAPABILITY_HEADER: current_token()}
 
     def override_session():
         with factory() as session:
@@ -102,12 +110,13 @@ def ai_client(monkeypatch):
     app.dependency_overrides[get_ai_secret_store] = lambda: store
     app.dependency_overrides[get_ai_transport] = lambda: transport
     try:
-        with TestClient(app) as client:
+        with TestClient(app, headers=token_headers) as client:
             yield client, store, transport
     finally:
         app.dependency_overrides.pop(get_v2_session, None)
         app.dependency_overrides.pop(get_ai_secret_store, None)
         app.dependency_overrides.pop(get_ai_transport, None)
+        reset_for_tests()
         engine.dispose()
 
 

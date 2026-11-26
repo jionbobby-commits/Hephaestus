@@ -12,6 +12,8 @@ import json
 import os
 from typing import Awaitable, Callable
 
+from app.v2.ai.capability import CAPABILITY_HEADER, verify_capability
+
 MAX_AI_BODY_BYTES = 2_000_000
 _AI_PREFIX = "/api/v2/ai"
 _LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
@@ -260,6 +262,17 @@ class AISecurityMiddleware:
                     await _send_json(send, 403, "invalid_origin", "跨站请求已被拒绝")
                     return
 
+        # C2.1: a local socket is not an identity. Every AI route requires the
+        # per-process capability token, delivered out-of-band by the desktop
+        # shell. The platform header is a UI hint, never an authorization claim.
+        capabilities = _header_values(scope, CAPABILITY_HEADER.lower())
+        if len(capabilities) != 1 or not verify_capability(capabilities[0].strip()):
+            if not capabilities:
+                await _send_json(send, 401, "missing_capability", "缺少本机 AI 访问令牌")
+            else:
+                await _send_json(send, 401, "invalid_capability", "本机 AI 访问令牌无效")
+            return
+
         encodings = _header_values(scope, "content-encoding")
         if any(value.strip().lower() not in {"", "identity"} for value in encodings):
             await _send_json(send, 415, "unsupported_encoding", "不支持压缩的请求体")
@@ -292,7 +305,9 @@ class AISecurityMiddleware:
             if not delivered:
                 delivered = True
                 return {"type": "http.request", "body": body or b"", "more_body": False}
-            return {"type": "http.disconnect"}
+            # Do not fake an immediate disconnect: StreamingResponse listens on
+            # receive() and would cancel the stream before the first chunk.
+            return await receive()
 
         async def send_security_headers(message):
             if message.get("type") == "http.response.start":

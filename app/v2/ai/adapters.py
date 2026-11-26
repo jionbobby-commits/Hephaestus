@@ -14,6 +14,7 @@ from app.v2.ai.errors import AIError
 from app.v2.ai.security import OPENAI_COMPATIBLE_KINDS, redact_secret, safe_endpoint
 from app.v2.ai.transport import (
     HttpResponse,
+    HttpResponseStream,
     HttpTransport,
     ResponseTooLarge,
     TransportConnectionError,
@@ -42,6 +43,16 @@ class ChatOutcome:
     content: str
     finish_reason: str | None = None
     usage: AIChatUsage | None = None
+
+
+@dataclass
+class StreamDelta:
+    """One incremental model fragment. Empty text may carry finish/usage only."""
+
+    text: str = ""
+    finish_reason: str | None = None
+    usage: AIChatUsage | None = None
+    done: bool = False
 
 
 class _AdapterBase:
@@ -108,6 +119,85 @@ class _AdapterBase:
             raise self._http_error(provider, response, url)
         return self._decode(provider, response)
 
+    def _open_stream(
+        self,
+        provider: ResolvedProvider,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str],
+        payload: dict[str, Any],
+    ) -> HttpResponseStream:
+        try:
+            response = self.transport.stream(
+                method,
+                url,
+                headers=headers,
+                json_body=payload,
+                timeout=float(provider.params.timeout_seconds),
+                max_bytes=self.max_bytes,
+                resolved_ips=provider.resolved_ips or None,
+            )
+        except TransportTimeout as exc:
+            raise self._transport_error(provider, exc) from exc
+        except ResponseTooLarge as exc:
+            raise self._transport_error(provider, exc) from exc
+        except (TransportConnectionError, OSError) as exc:
+            raise self._transport_error(provider, exc) from exc
+        if not 200 <= response.status < 300:
+            try:
+                body = b"".join(response.lines)
+            finally:
+                response.close()
+            raise self._http_error(
+                provider,
+                HttpResponse(status=response.status, headers=response.headers, body=body),
+                url,
+            )
+        return response
+
+    @staticmethod
+    def _transport_error(provider: ResolvedProvider, exc: Exception) -> AIError:
+        if isinstance(exc, TransportTimeout):
+            return AIError(
+                "timeout",
+                f"{provider.label} 请求超时（{provider.params.timeout_seconds:g} 秒）",
+                status_code=504,
+                provider_id=provider.id,
+                retryable=True,
+                details={"reason": type(exc).__name__},
+            )
+        if isinstance(exc, ResponseTooLarge):
+            return AIError(
+                "response_too_large",
+                "模型服务返回内容过大，已中止",
+                status_code=502,
+                provider_id=provider.id,
+                details={"limit_bytes": DEFAULT_MAX_BYTES},
+            )
+        hint = "请确认 Ollama 已启动" if provider.kind == "ollama" else "请检查网络和 Base URL"
+        return AIError(
+            "provider_unavailable",
+            f"无法连接 {provider.label}：{hint}",
+            status_code=503,
+            provider_id=provider.id,
+            retryable=True,
+            details={"reason": type(exc).__name__},
+        )
+
+    def _iter_stream(self, provider: ResolvedProvider, response: HttpResponseStream):
+        try:
+            for line in response:
+                yield line
+        except TransportTimeout as exc:
+            raise self._transport_error(provider, exc) from exc
+        except ResponseTooLarge as exc:
+            raise self._transport_error(provider, exc) from exc
+        except (TransportConnectionError, OSError) as exc:
+            raise self._transport_error(provider, exc) from exc
+        finally:
+            response.close()
+
     def _decode(self, provider: ResolvedProvider, response: HttpResponse) -> dict[str, Any]:
         raw = response.body.decode("utf-8", errors="replace")
         try:
@@ -158,6 +248,15 @@ class _AdapterBase:
         messages: list[AIChatMessage],
         system_prompt: str | None,
     ) -> ChatOutcome:
+        raise NotImplementedError
+
+    def chat_stream(
+        self,
+        provider: ResolvedProvider,
+        messages: list[AIChatMessage],
+        system_prompt: str | None,
+        cancel_event=None,
+    ):
         raise NotImplementedError
 
 
@@ -241,6 +340,75 @@ class OpenAICompatibleAdapter(_AdapterBase):
                 total_tokens=usage_data.get("total_tokens"),
             )
         return ChatOutcome(content=content, finish_reason=choices[0].get("finish_reason"), usage=usage)
+
+
+    def chat_stream(
+        self,
+        provider: ResolvedProvider,
+        messages: list[AIChatMessage],
+        system_prompt: str | None,
+        cancel_event=None,
+    ):
+        outgoing: list[dict[str, str]] = []
+        if system_prompt:
+            outgoing.append({"role": "system", "content": system_prompt})
+        outgoing.extend({"role": message.role, "content": message.content} for message in messages)
+        payload = {
+            "model": provider.model,
+            "messages": outgoing,
+            "temperature": provider.params.temperature,
+            "max_tokens": provider.params.max_tokens,
+            "top_p": provider.params.top_p,
+            "stream": True,
+        }
+        headers = {**self._headers(provider), "Accept": "text/event-stream"}
+        response = self._open_stream(provider, "POST", self._chat_url(provider), headers=headers, payload=payload)
+        usage: AIChatUsage | None = None
+        finish_reason: str | None = None
+        received = False
+        try:
+            for raw in self._iter_stream(provider, response):
+                if cancel_event is not None and cancel_event.is_set():
+                    return
+                line = raw.decode("utf-8", errors="replace").strip()
+                if not line or line.startswith(":"):
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    event = json.loads(data)
+                except ValueError:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                raw_usage = event.get("usage")
+                if isinstance(raw_usage, dict):
+                    usage = AIChatUsage(
+                        prompt_tokens=raw_usage.get("prompt_tokens"),
+                        completion_tokens=raw_usage.get("completion_tokens"),
+                        total_tokens=raw_usage.get("total_tokens"),
+                    )
+                choices = event.get("choices")
+                if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+                    continue
+                choice = choices[0]
+                delta = choice.get("delta")
+                text = delta.get("content") if isinstance(delta, dict) else None
+                if isinstance(text, list):
+                    text = "".join(str(part.get("text", "")) for part in text if isinstance(part, dict))
+                if isinstance(text, str) and text:
+                    received = True
+                    yield StreamDelta(text=text)
+                if choice.get("finish_reason"):
+                    finish_reason = str(choice["finish_reason"])
+        finally:
+            response.close()
+        if not received:
+            raise AIError("invalid_provider_response", "模型返回了空内容", status_code=502, provider_id=provider.id)
+        yield StreamDelta(finish_reason=finish_reason, usage=usage, done=True)
 
 
 class OllamaAdapter(_AdapterBase):
@@ -329,6 +497,86 @@ class OllamaAdapter(_AdapterBase):
                 total = prompt_tokens + completion_tokens
             usage = AIChatUsage(prompt_tokens=prompt_tokens, completion_tokens=completion_tokens, total_tokens=total)
         return ChatOutcome(content=content, finish_reason=data.get("done_reason"), usage=usage)
+
+
+    def chat_stream(
+        self,
+        provider: ResolvedProvider,
+        messages: list[AIChatMessage],
+        system_prompt: str | None,
+        cancel_event=None,
+    ):
+        installed = self.list_models(provider)
+        if not any(model.id == provider.model for model in installed):
+            raise AIError(
+                "model_not_found",
+                f"Ollama 未安装模型 {provider.model}",
+                status_code=404,
+                provider_id=provider.id,
+                details={"available_models": [model.id for model in installed][:50]},
+            )
+        outgoing: list[dict[str, str]] = []
+        if system_prompt:
+            outgoing.append({"role": "system", "content": system_prompt})
+        outgoing.extend({"role": message.role, "content": message.content} for message in messages)
+        payload = {
+            "model": provider.model,
+            "messages": outgoing,
+            "stream": True,
+            "options": {
+                "temperature": provider.params.temperature,
+                "top_p": provider.params.top_p,
+                "num_predict": provider.params.max_tokens,
+            },
+        }
+        headers = {**self._headers(), "Accept": "application/x-ndjson"}
+        response = self._open_stream(provider, "POST", f"{self._root(provider)}/api/chat", headers=headers, payload=payload)
+        received = False
+        try:
+            for raw in self._iter_stream(provider, response):
+                if cancel_event is not None and cancel_event.is_set():
+                    return
+                line = raw.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                message = event.get("message")
+                text = message.get("content") if isinstance(message, dict) else None
+                if isinstance(text, str) and text:
+                    received = True
+                    yield StreamDelta(text=text)
+                if event.get("done"):
+                    prompt_count = event.get("prompt_eval_count")
+                    eval_count = event.get("eval_count")
+                    usage = None
+                    if isinstance(prompt_count, int) or isinstance(eval_count, int):
+                        prompt_tokens = prompt_count if isinstance(prompt_count, int) else None
+                        completion_tokens = eval_count if isinstance(eval_count, int) else None
+                        total = (
+                            prompt_tokens + completion_tokens
+                            if prompt_tokens is not None and completion_tokens is not None
+                            else None
+                        )
+                        usage = AIChatUsage(
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
+                            total_tokens=total,
+                        )
+                    yield StreamDelta(
+                        finish_reason=str(event.get("done_reason") or "stop"),
+                        usage=usage,
+                        done=True,
+                    )
+                    return
+        finally:
+            response.close()
+        if not received:
+            raise AIError("invalid_provider_response", "Ollama 返回了空内容", status_code=502, provider_id=provider.id)
 
 
 def adapter_for(kind: str, transport: HttpTransport) -> _AdapterBase:

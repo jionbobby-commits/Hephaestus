@@ -6,7 +6,13 @@ import {
   type AppSettings,
   type AppSettingsPatch,
   type Attachment,
+  type Conversation,
+  type ConversationCreateInput,
+  type ConversationPage,
+  type ConversationPatchInput,
   type ListNotesOptions,
+  type Message,
+  type MessagePage,
   type Note,
   type NoteCreateInput,
   type NotePage,
@@ -46,6 +52,16 @@ interface ProviderRow {
   id: string; kind: AIProviderConfig["kind"]; label: string; base_url: string;
   model: string; key_ref: string | null; created_at: string; updated_at: string;
   extra_json: string | null;
+}
+interface ConversationRow {
+  id: string; title: string; provider_id: string | null; model: string;
+  created_at: string; updated_at: string; archived_at: string | null;
+  revision: number; extra_json: string | null;
+}
+interface MessageRow {
+  id: string; conversation_id: string; role: Message["role"]; content: string;
+  status: Message["status"]; sequence: number; client_id: string | null;
+  error_code: string | null; created_at: string; updated_at: string; revision: number;
 }
 
 function tagOf(row: TagRow): Tag {
@@ -112,6 +128,31 @@ function providerOf(row: ProviderRow): AIProviderConfig {
     is_default: extra.is_default === true,
     params: providerParamsOf(extra.params),
     has_key: Boolean(row.key_ref), created_at: row.created_at, updated_at: row.updated_at,
+  };
+}
+
+function conversationOf(row: ConversationRow, messageCount = 0): Conversation {
+  let systemPrompt: string | null = null;
+  try {
+    const extra = JSON.parse(row.extra_json || "{}");
+    if (extra && typeof extra === "object" && typeof extra.system_prompt === "string") {
+      systemPrompt = extra.system_prompt;
+    }
+  } catch { /* default null */ }
+  return {
+    id: row.id, title: row.title, provider_id: row.provider_id, model: row.model,
+    system_prompt: systemPrompt, created_at: row.created_at, updated_at: row.updated_at,
+    archived_at: row.archived_at, revision: Number(row.revision),
+    message_count: Number(messageCount),
+  };
+}
+
+function messageOf(row: MessageRow): Message {
+  return {
+    id: row.id, conversation_id: row.conversation_id, role: row.role,
+    content: row.content, status: row.status, sequence: Number(row.sequence),
+    client_id: row.client_id, error_code: row.error_code,
+    created_at: row.created_at, updated_at: row.updated_at, revision: Number(row.revision),
   };
 }
 
@@ -446,6 +487,201 @@ export class SqliteDataPort {
     const row = await this.client.get<ProviderRow>("SELECT * FROM v2_ai_providers WHERE id = ?", [providerId]);
     if (!row) throw new NotFoundError(`AI 配置不存在: ${providerId}`);
     await this.client.run("DELETE FROM v2_ai_providers WHERE id = ?", [providerId]);
+  }
+
+  async listConversations(
+    includeArchived = false,
+    page = 1,
+    pageSize = 50,
+  ): Promise<ConversationPage> {
+    const safePage = Math.max(1, Math.trunc(page));
+    const safeSize = Math.min(100, Math.max(1, Math.trunc(pageSize)));
+    const where = includeArchived ? "" : " WHERE archived_at IS NULL";
+    const totalRow = await this.client.get<{ total: number }>(
+      `SELECT count(*) AS total FROM v2_conversations${where}`,
+    );
+    const rows = await this.client.all<ConversationRow>(
+      `SELECT * FROM v2_conversations${where} ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?`,
+      [safeSize, (safePage - 1) * safeSize],
+    );
+    const items: Conversation[] = [];
+    for (const row of rows) {
+      const count = await this.client.get<{ total: number }>(
+        "SELECT count(*) AS total FROM v2_messages WHERE conversation_id = ?",
+        [row.id],
+      );
+      items.push(conversationOf(row, count?.total ?? 0));
+    }
+    return { items, total: Number(totalRow?.total ?? 0), page: safePage, page_size: safeSize };
+  }
+
+  async getConversation(conversationId: string): Promise<Conversation> {
+    const row = await this.client.get<ConversationRow>(
+      "SELECT * FROM v2_conversations WHERE id = ?", [conversationId],
+    );
+    if (!row) throw new NotFoundError(`对话不存在: ${conversationId}`);
+    const count = await this.client.get<{ total: number }>(
+      "SELECT count(*) AS total FROM v2_messages WHERE conversation_id = ?", [conversationId],
+    );
+    return conversationOf(row, count?.total ?? 0);
+  }
+
+  async createConversation(input: ConversationCreateInput): Promise<Conversation> {
+    const providerId = String(input.provider_id || "").trim();
+    if (!providerId) throw new ValidationError("provider_id 不能为空");
+    const title = String(input.title || "").trim() || "新对话";
+    if (title.length > 200) throw new ValidationError("对话标题不能超过 200 字");
+    const model = String(input.model || "").trim();
+    if (model.length > 200) throw new ValidationError("模型名不能超过 200 字");
+    const systemPrompt = input.system_prompt == null ? null : String(input.system_prompt);
+    if (systemPrompt !== null && systemPrompt.length > 20_000) {
+      throw new ValidationError("系统提示词不能超过 20000 字");
+    }
+    const now = nowIso();
+    const row: ConversationRow = {
+      id: newId(), title, provider_id: providerId, model,
+      created_at: now, updated_at: now, archived_at: null, revision: 1,
+      extra_json: JSON.stringify(systemPrompt === null ? {} : { system_prompt: systemPrompt }),
+    };
+    await this.client.run(
+      "INSERT INTO v2_conversations (id,title,provider_id,model,created_at,updated_at,archived_at,revision,extra_json) VALUES (?,?,?,?,?,?,?,?,?)",
+      [row.id, row.title, row.provider_id, row.model, row.created_at, row.updated_at, row.archived_at, row.revision, row.extra_json],
+    );
+    return conversationOf(row);
+  }
+
+  async updateConversation(conversationId: string, patch: ConversationPatchInput): Promise<Conversation> {
+    return this.transaction(async () => {
+      const row = await this.client.get<ConversationRow>(
+        "SELECT * FROM v2_conversations WHERE id = ?", [conversationId],
+      );
+      if (!row) throw new NotFoundError(`对话不存在: ${conversationId}`);
+      if (patch.revision != null && Number(patch.revision) !== Number(row.revision)) {
+        throw new ConflictError("对话已被其他操作修改，请刷新后重试");
+      }
+      const fields = new Set(Object.keys(patch));
+      if (fields.has("title")) {
+        const title = String(patch.title || "").trim();
+        if (!title || title.length > 200) throw new ValidationError("对话标题长度必须为 1 到 200 字");
+        row.title = title;
+      }
+      if (fields.has("provider_id")) {
+        const providerId = String(patch.provider_id || "").trim();
+        if (!providerId) throw new ValidationError("provider_id 不能为空");
+        row.provider_id = providerId;
+      }
+      if (fields.has("model")) {
+        const model = String(patch.model || "").trim();
+        if (!model || model.length > 200) throw new ValidationError("模型名长度必须为 1 到 200 字");
+        row.model = model;
+      }
+      let extra: Record<string, unknown> = {};
+      try {
+        const parsed = JSON.parse(row.extra_json || "{}");
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) extra = parsed;
+      } catch { /* reset corrupt extra */ }
+      if (fields.has("system_prompt")) {
+        if (patch.system_prompt == null || patch.system_prompt === "") delete extra.system_prompt;
+        else {
+          const prompt = String(patch.system_prompt);
+          if (prompt.length > 20_000) throw new ValidationError("系统提示词不能超过 20000 字");
+          extra.system_prompt = prompt;
+        }
+      }
+      if (fields.has("archived")) row.archived_at = patch.archived ? nowIso() : null;
+      row.extra_json = JSON.stringify(extra);
+      row.updated_at = nowIso();
+      row.revision = Number(row.revision) + 1;
+      await this.client.run(
+        "UPDATE v2_conversations SET title=?,provider_id=?,model=?,updated_at=?,archived_at=?,revision=?,extra_json=? WHERE id=?",
+        [row.title, row.provider_id, row.model, row.updated_at, row.archived_at, row.revision, row.extra_json, conversationId],
+      );
+      const count = await this.client.get<{ total: number }>(
+        "SELECT count(*) AS total FROM v2_messages WHERE conversation_id = ?", [conversationId],
+      );
+      return conversationOf(row, count?.total ?? 0);
+    });
+  }
+
+  async deleteConversation(conversationId: string): Promise<void> {
+    await this.transaction(async () => {
+      const row = await this.client.get<ConversationRow>(
+        "SELECT id FROM v2_conversations WHERE id = ?", [conversationId],
+      );
+      if (!row) throw new NotFoundError(`对话不存在: ${conversationId}`);
+      await this.client.run("DELETE FROM v2_messages WHERE conversation_id = ?", [conversationId]);
+      await this.client.run("DELETE FROM v2_conversations WHERE id = ?", [conversationId]);
+    });
+  }
+
+  async listMessages(conversationId: string, page = 1, pageSize = 100): Promise<MessagePage> {
+    await this.getConversation(conversationId);
+    const safePage = Math.max(1, Math.trunc(page));
+    const safeSize = Math.min(200, Math.max(1, Math.trunc(pageSize)));
+    const totalRow = await this.client.get<{ total: number }>(
+      "SELECT count(*) AS total FROM v2_messages WHERE conversation_id = ?", [conversationId],
+    );
+    const rows = await this.client.all<MessageRow>(
+      "SELECT * FROM v2_messages WHERE conversation_id = ? ORDER BY sequence ASC, id ASC LIMIT ? OFFSET ?",
+      [conversationId, safeSize, (safePage - 1) * safeSize],
+    );
+    return { items: rows.map(messageOf), total: Number(totalRow?.total ?? 0), page: safePage, page_size: safeSize };
+  }
+
+  async appendMessage(
+    conversationId: string,
+    input: { role: Message["role"]; content: string; status?: Message["status"]; clientId?: string | null },
+  ): Promise<Message> {
+    return this.transaction(async () => {
+      const conversation = await this.client.get<ConversationRow>(
+        "SELECT * FROM v2_conversations WHERE id = ?", [conversationId],
+      );
+      if (!conversation) throw new NotFoundError(`对话不存在: ${conversationId}`);
+      if (input.clientId) {
+        const existing = await this.client.get<MessageRow>(
+          "SELECT * FROM v2_messages WHERE conversation_id = ? AND client_id = ?",
+          [conversationId, input.clientId],
+        );
+        if (existing) return messageOf(existing);
+      }
+      const maxRow = await this.client.get<{ value: number }>(
+        "SELECT max(sequence) AS value FROM v2_messages WHERE conversation_id = ?", [conversationId],
+      );
+      const now = nowIso();
+      const row: MessageRow = {
+        id: newId(), conversation_id: conversationId, role: input.role,
+        content: input.content, status: input.status ?? "complete",
+        sequence: Number(maxRow?.value ?? 0) + 1, client_id: input.clientId ?? null,
+        error_code: null, created_at: now, updated_at: now, revision: 1,
+      };
+      await this.client.run(
+        "INSERT INTO v2_messages (id,conversation_id,role,content,status,sequence,client_id,error_code,created_at,updated_at,revision) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        [row.id, row.conversation_id, row.role, row.content, row.status, row.sequence, row.client_id, row.error_code, row.created_at, row.updated_at, row.revision],
+      );
+      await this.client.run("UPDATE v2_conversations SET updated_at = ? WHERE id = ?", [now, conversationId]);
+      return messageOf(row);
+    });
+  }
+
+  async updateMessage(
+    messageId: string,
+    patch: { content?: string; status?: Message["status"]; error_code?: string | null },
+  ): Promise<Message> {
+    return this.transaction(async () => {
+      const row = await this.client.get<MessageRow>("SELECT * FROM v2_messages WHERE id = ?", [messageId]);
+      if (!row) throw new NotFoundError(`消息不存在: ${messageId}`);
+      const fields = new Set(Object.keys(patch));
+      if (fields.has("content")) row.content = String(patch.content ?? "");
+      if (fields.has("status")) row.status = patch.status ?? row.status;
+      if (fields.has("error_code")) row.error_code = patch.error_code ?? null;
+      row.updated_at = nowIso();
+      row.revision = Number(row.revision) + 1;
+      await this.client.run(
+        "UPDATE v2_messages SET content=?,status=?,error_code=?,updated_at=?,revision=? WHERE id=?",
+        [row.content, row.status, row.error_code, row.updated_at, row.revision, messageId],
+      );
+      return messageOf(row);
+    });
   }
 
   async listAttachments(noteId: string): Promise<Attachment[]> {

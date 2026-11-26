@@ -45,7 +45,7 @@ cd mobile
 node --experimental-strip-types --experimental-sqlite --test tests/contract.test.ts
 ~~~
 
-结果：5 passed，0 failed；有两条 ExperimentalWarning（类型剥离、SQLite），属于 Node 22 的实验特性提示。
+结果：6 passed，0 failed；有两条 ExperimentalWarning（类型剥离、SQLite），属于 Node 22 的实验特性提示。C2 新增第 6 项会话/消息契约测试。
 
 覆盖：
 
@@ -54,6 +54,7 @@ node --experimental-strip-types --experimental-sqlite --test tests/contract.test
 3. 标题/标签校验与事务回滚边界。
 4. 设置与 AI 配置不暴露 key_ref。
 5. 分页与附件列表稳定性。
+6. C2 会话与消息：创建会话、client_id 幂等、消息分页、revision 冲突、归档过滤、消息错误状态与级联删除。
 
 类型检查：
 
@@ -81,7 +82,7 @@ npm run typecheck
 
 ## 5. 未覆盖
 
-- AI 适配器与真实网络调用在 C1 test_v2_ai.py 中用 FakeTransport 覆盖；移动端只验证契约与本地 DataPort，不含真实 HTTP。
+- AI 适配器与真实网络调用在 C1/C2 Python 测试中用 Mock/FakeTransport 覆盖；移动端只验证契约与本地 DataPort，不含真实 HTTP 或流式对话。
 - Capacitor 原生 SQLite 适配器（阶段 G）。
 - 多进程/多设备并发写同一 SQLite 文件。
 - 附件二进制上传与引用计数。

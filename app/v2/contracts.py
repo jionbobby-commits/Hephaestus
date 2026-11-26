@@ -13,7 +13,15 @@ from html.parser import HTMLParser
 from datetime import datetime, timezone
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 Locale = Literal["zh-CN", "en", "ja", "es", "fr", "ru", "ar", "fa", "he", "tr"]
 Theme = Literal["light", "dark", "system"]
@@ -324,6 +332,150 @@ class AIErrorInfo(BaseModel):
 class AIErrorResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     error: AIErrorInfo
+
+
+# ---------- C2 conversations ----------
+
+MessageStatus = Literal["pending", "streaming", "complete", "stopped", "error"]
+MessageRole = Literal["user", "assistant", "system"]
+
+
+class ConversationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider_id: NoteId
+    model: str | None = Field(default=None, min_length=1, max_length=200)
+    title: str = Field(default="新对话", min_length=1, max_length=200)
+    system_prompt: str | None = Field(default=None, max_length=20_000)
+
+    @field_validator("title")
+    @classmethod
+    def _title_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("标题不能为空")
+        return value.strip()
+
+
+class ConversationPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    provider_id: NoteId | None = None
+    model: str | None = Field(default=None, min_length=1, max_length=200)
+    system_prompt: str | None = Field(default=None, max_length=20_000)
+    archived: bool | None = None
+    revision: int | None = Field(default=None, ge=1)
+
+    @field_validator("title")
+    @classmethod
+    def _title_not_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("标题不能为空")
+        return value.strip() if value is not None else None
+
+    @model_validator(mode="after")
+    def _check(self) -> "ConversationPatch":
+        fields = self.model_fields_set - {"revision"}
+        if not fields:
+            raise ValueError("至少需要修改一个字段")
+        for name in ("title", "provider_id", "model", "archived"):
+            if name in self.model_fields_set and getattr(self, name) is None:
+                raise ValueError(f"{name} 不能为 null")
+        return self
+
+
+class ConversationRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: NoteId
+    title: str
+    provider_id: str | None = None
+    model: str
+    system_prompt: str | None = None
+    created_at: IsoUtc
+    updated_at: IsoUtc
+    archived_at: IsoUtc | None = None
+    revision: int = Field(ge=1)
+    message_count: int = Field(default=0, ge=0)
+
+
+class ConversationPage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    items: list[ConversationRead]
+    total: int = Field(ge=0)
+    page: int = Field(ge=1)
+    page_size: int = Field(ge=1)
+
+
+class MessageRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: NoteId
+    conversation_id: NoteId
+    role: MessageRole
+    content: str = Field(default="", max_length=20_000)
+    status: MessageStatus
+    sequence: int = Field(ge=1)
+    client_id: str | None = None
+    error_code: str | None = None
+    created_at: IsoUtc
+    updated_at: IsoUtc
+    revision: int = Field(ge=1)
+
+
+class MessagePage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    items: list[MessageRead]
+    total: int = Field(ge=0)
+    page: int = Field(ge=1)
+    page_size: int = Field(ge=1)
+
+
+class ConversationDetail(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    conversation: ConversationRead
+    messages: list[MessageRead]
+    total: int = Field(ge=0)
+    page: int = Field(ge=1)
+    page_size: int = Field(ge=1)
+
+
+class SendMessageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    content: str = Field(min_length=1, max_length=20_000)
+    client_message_id: str | None = Field(default=None, min_length=1, max_length=64)
+    stream: bool = False
+
+    @field_validator("content")
+    @classmethod
+    def _content_not_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("消息内容不能为空")
+        return stripped
+
+
+class RegenerateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    message_id: NoteId
+    stream: bool = False
+
+
+class StopGenerationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    message_id: NoteId | None = None
+
+
+class StopGenerationResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    stopped: bool
+    message: MessageRead | None = None
+
+
+class ChatReply(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    conversation: ConversationRead
+    user_message: MessageRead
+    assistant_message: MessageRead
+    finish_reason: str | None = None
+    usage: AIChatUsage | None = None
+
 
 
 class SnapshotSummary(BaseModel):

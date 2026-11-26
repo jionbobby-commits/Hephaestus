@@ -13,6 +13,7 @@ import json
 import socket
 import ssl
 from dataclasses import dataclass
+from collections.abc import Callable, Iterator
 from typing import Any, Protocol, Sequence
 from urllib.parse import urlsplit
 
@@ -36,6 +37,19 @@ class HttpResponse:
     body: bytes
 
 
+@dataclass
+class HttpResponseStream:
+    """A pinned streaming response. Iterate lines, then close exactly once."""
+
+    status: int
+    headers: dict[str, str]
+    lines: Iterator[bytes]
+    close: Callable[[], None]
+
+    def __iter__(self) -> Iterator[bytes]:
+        return self.lines
+
+
 class HttpTransport(Protocol):
     def request(
         self,
@@ -48,6 +62,19 @@ class HttpTransport(Protocol):
         max_bytes: int,
         resolved_ips: Sequence[str] | None = None,
     ) -> HttpResponse:
+        ...
+
+    def stream(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str],
+        json_body: dict[str, Any] | None,
+        timeout: float,
+        max_bytes: int,
+        resolved_ips: Sequence[str] | None = None,
+    ) -> HttpResponseStream:
         ...
 
 
@@ -128,6 +155,137 @@ class PinnedHttpTransport:
     sent to an HTTP proxy, and an API key must not be forwarded to one by
     accident. No redirect is followed.
     """
+
+    def stream(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str],
+        json_body: dict[str, Any] | None,
+        timeout: float,
+        max_bytes: int,
+        resolved_ips: Sequence[str] | None = None,
+    ) -> HttpResponseStream:
+        """Streaming twin of request(): pinned IP, no redirects, byte cap."""
+        try:
+            parts = urlsplit(url)
+            host = parts.hostname or ""
+            port = parts.port or (443 if parts.scheme == "https" else 80)
+        except ValueError as exc:
+            raise TransportConnectionError("invalid URL") from exc
+        if parts.scheme not in {"http", "https"} or not host:
+            raise TransportConnectionError("invalid URL")
+        path = parts.path or "/"
+        if parts.query:
+            path = f"{path}?{parts.query}"
+        data = None
+        request_headers = {key: value for key, value in headers.items() if key.lower() != "host"}
+        if json_body is not None:
+            data = json.dumps(json_body, ensure_ascii=False).encode("utf-8")
+            request_headers.setdefault("Content-Type", "application/json")
+        addresses = (
+            _resolve_host(host, port) if resolved_ips is None else _normalize_ips(resolved_ips)
+        )
+        if not addresses:
+            raise TransportConnectionError("no validated address")
+        context = ssl.create_default_context() if parts.scheme == "https" else None
+        last_error: Exception | None = None
+        for address in addresses:
+            connection: http.client.HTTPConnection | None = None
+            sent = False
+            try:
+                if parts.scheme == "https":
+                    connection = _PinnedHTTPSConnection(
+                        host, port, connect_ip=address, timeout=timeout, context=context  # type: ignore[arg-type]
+                    )
+                else:
+                    connection = _PinnedHTTPConnection(
+                        host, port, connect_ip=address, timeout=timeout
+                    )
+                connection.connect()
+                sent = True
+                connection.request(method, path, body=data, headers=request_headers)
+                response = connection.getresponse()
+                status = int(response.status)
+                response_headers = {k.lower(): v for k, v in response.headers.items()}
+                current = connection
+
+                def close() -> None:
+                    try:
+                        current.close()
+                    except Exception:
+                        pass
+
+                if not 200 <= status < 300:
+                    body = response.read(max_bytes + 1)
+                    if len(body) > max_bytes:
+                        raise ResponseTooLarge(max_bytes)
+                    close()
+                    return HttpResponseStream(
+                        status=status,
+                        headers=response_headers,
+                        lines=iter([body]),
+                        close=lambda: None,
+                    )
+
+                def lines() -> Iterator[bytes]:
+                    total = 0
+                    try:
+                        while True:
+                            line = response.readline()
+                            if not line:
+                                break
+                            total += len(line)
+                            if total > max_bytes:
+                                raise ResponseTooLarge(max_bytes)
+                            yield line
+                    except ResponseTooLarge:
+                        raise
+                    except (TimeoutError, socket.timeout) as exc:
+                        raise TransportTimeout(str(exc)) from exc
+                    except (OSError, http.client.HTTPException) as exc:
+                        raise TransportConnectionError(
+                            f"connection failed: {type(exc).__name__}"
+                        ) from exc
+                    finally:
+                        close()
+
+                return HttpResponseStream(
+                    status=status,
+                    headers=response_headers,
+                    lines=lines(),
+                    close=close,
+                )
+            except ResponseTooLarge:
+                if connection is not None:
+                    connection.close()
+                raise
+            except (TransportTimeout, TransportConnectionError):
+                if connection is not None:
+                    connection.close()
+                raise
+            except ssl.SSLCertVerificationError as exc:
+                last_error = exc
+                if connection is not None:
+                    connection.close()
+                if sent:
+                    raise TransportConnectionError("TLS certificate verification failed") from exc
+            except (TimeoutError, socket.timeout) as exc:
+                if connection is not None:
+                    connection.close()
+                if sent:
+                    raise TransportTimeout(str(exc)) from exc
+                last_error = exc
+            except (OSError, http.client.HTTPException) as exc:
+                if connection is not None:
+                    connection.close()
+                if sent:
+                    raise TransportConnectionError(f"connection failed: {type(exc).__name__}") from exc
+                last_error = exc
+        raise TransportConnectionError(
+            f"connection failed: {type(last_error).__name__ if last_error else 'unknown'}"
+        )
 
     def request(
         self,

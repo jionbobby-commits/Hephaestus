@@ -103,6 +103,14 @@ enabled、is_default、params 保存在既有 extra_json，不新增列。旧 ke
 
 移动端不允许 Ollama：TypeScript DataPort 与后端 X-Hephaestus-Platform: mobile 都会拒绝创建或使用 Ollama；ollama 仍保留在共享枚举中，供桌面端使用。
 
+### Conversation / Message（C2）
+
+Conversation：id、title、provider_id、model、created_at、updated_at、archived_at、revision、system_prompt（存 extra_json）、message_count（读取时计算）。
+
+Message：id、conversation_id、role（user/assistant/system）、content、status（pending/streaming/complete/stopped/error）、sequence、client_id（幂等键）、error_code、created_at、updated_at、revision。
+
+两张表为 C2 纯增量表 v2_conversations / v2_messages，不修改任何已有列。删除会话级联删除消息；消息只属于对话，不进入笔记、标签、收藏或回收站。C2 未执行真实迁移，真实库仍是 legacy。
+
 ## 3. 删除、恢复与级联
 
 - DELETE /api/v2/notes/{id} 默认软删除：is_trashed=true，trashed_at=now，正文保留。

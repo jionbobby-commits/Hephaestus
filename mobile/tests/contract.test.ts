@@ -150,3 +150,60 @@ test("mobile DataPort pagination and attachment listing are contract-stable", as
     client.close();
   }
 });
+
+test("mobile DataPort conversation and message contract", async () => {
+  const client = new NodeSqliteClient();
+  const port = await SqliteDataPort.open(client);
+  try {
+    const conversation = await port.createConversation({ provider_id: "provider-mobile-1", title: "  " });
+    assert.equal(conversation.title, "新对话");
+    assert.equal(conversation.revision, 1);
+    assert.equal(conversation.message_count, 0);
+
+    const user = await port.appendMessage(conversation.id, {
+      role: "user", content: "你好", clientId: "client-1",
+    });
+    const duplicate = await port.appendMessage(conversation.id, {
+      role: "user", content: "重复提交", clientId: "client-1",
+    });
+    assert.equal(duplicate.id, user.id);
+    const assistant = await port.appendMessage(conversation.id, {
+      role: "assistant", content: "你好，我是赫淮斯托斯", status: "complete",
+    });
+    assert.equal(assistant.sequence, 2);
+
+    const messages = await port.listMessages(conversation.id);
+    assert.equal(messages.total, 2);
+    assert.deepEqual(messages.items.map((item) => item.role), ["user", "assistant"]);
+
+    const renamed = await port.updateConversation(conversation.id, {
+      title: "移动端会话", revision: conversation.revision,
+    });
+    assert.equal(renamed.title, "移动端会话");
+    assert.equal(renamed.revision, 2);
+    await assert.rejects(
+      () => port.updateConversation(conversation.id, { title: "冲突", revision: 1 }),
+      ConflictError,
+    );
+
+    const archived = await port.updateConversation(conversation.id, {
+      archived: true, revision: renamed.revision,
+    });
+    assert.notEqual(archived.archived_at, null);
+    assert.equal((await port.listConversations()).total, 0);
+    assert.equal((await port.listConversations(true)).total, 1);
+
+    const failed = await port.updateMessage(assistant.id, {
+      status: "error", error_code: "provider_unavailable",
+    });
+    assert.equal(failed.status, "error");
+    assert.equal(failed.error_code, "provider_unavailable");
+    assert.equal(failed.revision, 2);
+
+    await port.deleteConversation(conversation.id);
+    await assert.rejects(() => port.getConversation(conversation.id), NotFoundError);
+    assert.equal((await port.listMessages(conversation.id).catch((error) => error)) instanceof NotFoundError, true);
+  } finally {
+    client.close();
+  }
+});

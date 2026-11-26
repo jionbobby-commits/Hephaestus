@@ -1,6 +1,6 @@
 # Hephaestus V2.0 文档
 
-本目录保存 V2.0 跨平台升级的阶段文档。阶段 A、B1、B2、B3、C1 与 C1.1 已完成并等待验收；当前等待 **真实库迁移的单独授权**。真实库尚未迁移；C1/C1.1 只完成后端 AI Provider 架构与安全复核，聊天 UI、人格、RAG、语音、附件送入模型、业务 UI 重构与安装包尚未开始。
+本目录保存 V2.0 跨平台升级的阶段文档。阶段 A、B1、B2、B3、C1、C1.1 与 C2 已完成并等待验收；当前等待 **C2 验收与真实库迁移的单独授权**。真实库尚未迁移；C2 完成后端对话数据契约、本机 Capability Token、流式引擎与对话 API，聊天 UI、人格、RAG、语音、附件送入模型、业务 UI 重构与安装包尚未开始。
 
 | 文档 | 内容 |
 |---|---|
@@ -27,22 +27,24 @@
 | [21-ai-provider-architecture.md](21-ai-provider-architecture.md) | C1 AI Provider 分层、适配器、密钥、SSRF、API 与限制 |
 | [22-phase-c1-report.md](22-phase-c1-report.md) | C1 阶段总报告、测试结果、改动文件与验收请求 |
 | [23-ai-security-audit.md](23-ai-security-audit.md) | C1.1 AI Provider 安全复核、风险分级、修复与残余风险 |
+| [24-c2-chat-architecture.md](24-c2-chat-architecture.md) | C2 对话数据模型、Capability Token、流式协议、API 与限制 |
 
 ## 当前状态
 
 - 分支：`feat/v2-cross-platform`
 - 基线：`main` / `3e341a5aeb486fb825fae2f71a0c9f7955ba040f`
-- 现有测试：129 项；Windows 128 passed + 1 skipped（1 warning：Starlette httpx/TestClient 弃用提示），Linux CI 预计 122 passed + 7 skipped（待 GitHub Actions 验证）
-- 其中 B1 新增 14 项 Python 测试；B2 新增 10 项 Python 测试；B3 新增 4 项迁移测试（8 项迁移测试总计）；C1 新增 16 项 AI 测试；C1.1 新增 25 项 AI 安全测试
-- 前端 DataPort Node 测试：8 passed；移动端 5 项 Node 契约测试
+- 现有测试：150 项；Windows 149 passed + 1 skipped（1 warning：Starlette httpx/TestClient 弃用提示）
+- 其中 B1 新增 14 项 Python 测试；B2 新增 10 项 Python 测试；B3 新增 4 项迁移测试（8 项迁移测试总计）；C1 新增 16 项 AI 测试；C1.1 新增 25 项 AI 安全测试；C2 新增 21 项对话测试
+- 前端 DataPort Node 测试：8 passed；移动端 6 项 Node 契约测试；tsc --noEmit 通过
 - 真实用户数据：`frontend_state` 1 行（7 条笔记、4 个标签）；`notes` 表 0 行
 - 真实库 SHA256 仍为 e16595...；未执行真实迁移、未修改用户数据、未构建任何新平台安装包
 - B1 已在独立副本上完成迁移、完整性、幂等、备份恢复演练
 - B2 已完成四种数据状态、单写入源、冲突与断网保存、刷新/重开、重复提交、初始化失败恢复的真实窗口验证
 - B3 已完成真实数据只读盘点、独立备份、副本迁移、逐字段校验、幂等、失败恢复、回滚演练和迁移副本的真实 UI 验收
 - C1 已完成统一 AI Provider 抽象、Ollama/OpenAI 兼容适配器、密钥托管、SSRF 防护、/api/v2/ai/* 与 16 项测试；未实现聊天 UI 与模型自动读取笔记
-- C1.1 已完成 Host/Origin 边界、DNS pinning、CGNAT/IPv4-mapped SSRF 修复、422 密钥回显修复、跨进程密钥锁、请求体/并发限制与 25 项安全测试；未引入用户鉴权
-- **真实库未迁移**；B3.4 迁移预案未执行，C1/C1.1 未修改真实库
+- C1.1 已完成 Host/Origin 边界、DNS pinning、CGNAT/IPv4-mapped SSRF 修复、422 密钥回显修复、跨进程密钥锁、请求体/并发限制与 25 项安全测试
+- C2 已完成本机 Capability Token、Conversation/Message 契约、Python/移动 DataPort、流式/停止/重新生成、对话 API 与 21 项对话测试；Web 浏览器无法安全取得 token，因此 Web 端 AI 默认不可用
+- **真实库未迁移**；B3.4 迁移预案未执行，C1/C1.1/C2 未修改真实库
 
 ## 待确认
 

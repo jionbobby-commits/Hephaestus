@@ -16,6 +16,13 @@ from app.v2.contracts import (
     AIProviderConfigCreate,
     AIProviderConfigRead,
     AIProviderConfigUpdate,
+    ChatReply,
+    ConversationCreate,
+    ConversationPage,
+    ConversationPatch,
+    ConversationRead,
+    MessagePage,
+    MessageRead,
     AIProviderParams,
     AppSettings,
     AppSettingsPatch,
@@ -36,6 +43,8 @@ from app.v2.models import (
     AIProviderConfigV2,
     AppSettingV2,
     AttachmentV2,
+    ConversationV2,
+    MessageV2,
     NoteV2,
     TagV2,
     v2_note_attachments,
@@ -454,6 +463,357 @@ class SqlAlchemyDataPort:
         row = self.get_ai_provider_row(provider_id)
         self.session.delete(row)
         self.session.commit()
+
+
+    # ---------- C2 conversations and messages ----------
+
+    def _conversation(self, conversation_id: str) -> ConversationV2:
+        row = self.session.get(ConversationV2, conversation_id)
+        if row is None:
+            raise NotFoundError(f"对话不存在: {conversation_id}")
+        return row
+
+    def _message(self, message_id: str) -> MessageV2:
+        row = self.session.get(MessageV2, message_id)
+        if row is None:
+            raise NotFoundError(f"消息不存在: {message_id}")
+        return row
+
+    @staticmethod
+    def _conversation_extra(row: ConversationV2) -> dict[str, Any]:
+        try:
+            value = json.loads(row.extra_json or "{}")
+        except (TypeError, json.JSONDecodeError):
+            value = {}
+        return value if isinstance(value, dict) else {}
+
+    def _message_count(self, conversation_id: str) -> int:
+        return int(
+            self.session.scalar(
+                select(func.count()).select_from(MessageV2).where(
+                    MessageV2.conversation_id == conversation_id
+                )
+            )
+            or 0
+        )
+
+    def conversation_public(self, row: ConversationV2, *, message_count: int | None = None) -> ConversationRead:
+        extra = self._conversation_extra(row)
+        prompt = extra.get("system_prompt")
+        return ConversationRead(
+            id=row.id,
+            title=row.title,
+            provider_id=row.provider_id,
+            model=row.model or "",
+            system_prompt=str(prompt) if isinstance(prompt, str) and prompt else None,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            archived_at=row.archived_at,
+            revision=row.revision,
+            message_count=self._message_count(row.id) if message_count is None else message_count,
+        )
+
+    @staticmethod
+    def _message_public(row: MessageV2) -> MessageRead:
+        return MessageRead(
+            id=row.id,
+            conversation_id=row.conversation_id,
+            role=row.role,  # type: ignore[arg-type]
+            content=row.content or "",
+            status=row.status,  # type: ignore[arg-type]
+            sequence=row.sequence,
+            client_id=row.client_id,
+            error_code=row.error_code,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            revision=row.revision,
+        )
+
+    def list_conversations(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 50,
+        include_archived: bool = False,
+    ) -> ConversationPage:
+        stmt = select(ConversationV2)
+        count_stmt = select(func.count()).select_from(ConversationV2)
+        if not include_archived:
+            stmt = stmt.where(ConversationV2.archived_at.is_(None))
+            count_stmt = count_stmt.where(ConversationV2.archived_at.is_(None))
+        total = int(self.session.scalar(count_stmt) or 0)
+        rows = list(
+            self.session.scalars(
+                stmt.order_by(ConversationV2.updated_at.desc(), ConversationV2.id.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            ).all()
+        )
+        return ConversationPage(
+            items=[self.conversation_public(row) for row in rows],
+            total=total,
+            page=page,
+            page_size=page_size,
+        )
+
+    def get_conversation(self, conversation_id: str) -> ConversationRead:
+        return self.conversation_public(self._conversation(conversation_id))
+
+    def create_conversation(self, payload: ConversationCreate, *, model: str) -> ConversationRead:
+        now = utc_now_iso()
+        extra: dict[str, Any] = {}
+        if payload.system_prompt:
+            extra["system_prompt"] = payload.system_prompt
+        row = ConversationV2(
+            id=_new_id(),
+            title=payload.title.strip() or "新对话",
+            provider_id=payload.provider_id,
+            model=model,
+            created_at=now,
+            updated_at=now,
+            archived_at=None,
+            revision=1,
+            extra_json=json.dumps(extra, ensure_ascii=False),
+        )
+        self.session.add(row)
+        self.session.commit()
+        self.session.refresh(row)
+        return self.conversation_public(row)
+
+    def update_conversation(self, conversation_id: str, payload: ConversationPatch) -> ConversationRead:
+        row = self._conversation(conversation_id)
+        if payload.revision is not None and payload.revision != row.revision:
+            raise ConflictError("对话已被其他操作修改，请刷新后重试")
+        fields = payload.model_fields_set
+        if "title" in fields and payload.title is not None:
+            row.title = payload.title.strip()
+        if "provider_id" in fields and payload.provider_id is not None:
+            row.provider_id = payload.provider_id
+        if "model" in fields and payload.model is not None:
+            row.model = payload.model
+        if "archived" in fields and payload.archived is not None:
+            row.archived_at = utc_now_iso() if payload.archived else None
+        if "system_prompt" in fields:
+            extra = self._conversation_extra(row)
+            if payload.system_prompt:
+                extra["system_prompt"] = payload.system_prompt
+            else:
+                extra.pop("system_prompt", None)
+            row.extra_json = json.dumps(extra, ensure_ascii=False)
+        row.revision += 1
+        row.updated_at = utc_now_iso()
+        self.session.commit()
+        self.session.refresh(row)
+        return self.conversation_public(row)
+
+    def delete_conversation(self, conversation_id: str) -> None:
+        row = self._conversation(conversation_id)
+        self.session.execute(delete(MessageV2).where(MessageV2.conversation_id == conversation_id))
+        self.session.delete(row)
+        self.session.commit()
+
+    def list_messages(
+        self,
+        conversation_id: str,
+        *,
+        page: int = 1,
+        page_size: int = 100,
+    ) -> MessagePage:
+        self._conversation(conversation_id)
+        total = int(
+            self.session.scalar(
+                select(func.count()).select_from(MessageV2).where(
+                    MessageV2.conversation_id == conversation_id
+                )
+            )
+            or 0
+        )
+        rows = list(
+            self.session.scalars(
+                select(MessageV2)
+                .where(MessageV2.conversation_id == conversation_id)
+                .order_by(MessageV2.sequence.asc(), MessageV2.id.asc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            ).all()
+        )
+        return MessagePage(
+            items=[self._message_public(row) for row in rows],
+            total=total,
+            page=page,
+            page_size=page_size,
+        )
+
+    def get_message(self, message_id: str) -> MessageRead:
+        return self._message_public(self._message(message_id))
+
+    def find_message_by_client_id(self, conversation_id: str, client_id: str) -> MessageRead | None:
+        row = self.session.scalar(
+            select(MessageV2).where(
+                MessageV2.conversation_id == conversation_id,
+                MessageV2.client_id == client_id,
+            )
+        )
+        return self._message_public(row) if row is not None else None
+
+    def next_message(self, conversation_id: str, sequence: int) -> MessageRead | None:
+        row = self.session.scalar(
+            select(MessageV2)
+            .where(
+                MessageV2.conversation_id == conversation_id,
+                MessageV2.sequence == sequence,
+            )
+            .limit(1)
+        )
+        return self._message_public(row) if row is not None else None
+
+    def append_message(
+        self,
+        conversation_id: str,
+        *,
+        role: str,
+        content: str,
+        status: str = "complete",
+        client_id: str | None = None,
+    ) -> MessageRead:
+        conversation = self._conversation(conversation_id)
+        if client_id:
+            existing = self.find_message_by_client_id(conversation_id, client_id)
+            if existing is not None:
+                return existing
+        now = utc_now_iso()
+        current_max = self.session.scalar(
+            select(func.max(MessageV2.sequence)).where(
+                MessageV2.conversation_id == conversation_id
+            )
+        )
+        row = MessageV2(
+            id=_new_id(),
+            conversation_id=conversation_id,
+            role=role,
+            content=content,
+            status=status,
+            sequence=int(current_max or 0) + 1,
+            client_id=client_id,
+            error_code=None,
+            created_at=now,
+            updated_at=now,
+            revision=1,
+        )
+        self.session.add(row)
+        conversation.updated_at = now
+        self.session.commit()
+        self.session.refresh(row)
+        return self._message_public(row)
+
+    def update_message(
+        self,
+        message_id: str,
+        *,
+        content: str | object = _UNSET,
+        status: str | object = _UNSET,
+        error_code: str | None | object = _UNSET,
+    ) -> MessageRead:
+        row = self._message(message_id)
+        if content is not _UNSET:
+            row.content = str(content)
+        if status is not _UNSET:
+            row.status = str(status)
+        if error_code is not _UNSET:
+            row.error_code = error_code  # type: ignore[assignment]
+        row.revision += 1
+        row.updated_at = utc_now_iso()
+        self.session.commit()
+        self.session.refresh(row)
+        return self._message_public(row)
+
+    def recover_stale_messages(
+        self, conversation_id: str, *, older_than_seconds: int = 120
+    ) -> int:
+        """Mark abandoned pending/streaming placeholders after a crash.
+
+        Live streams touch updated_at on every delta, so only genuinely stale
+        rows are converted. Without this a process crash would leave an
+        assistant bubble "streaming" forever.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(seconds=max(1, older_than_seconds))
+        ).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        rows = list(
+            self.session.scalars(
+                select(MessageV2).where(
+                    MessageV2.conversation_id == conversation_id,
+                    MessageV2.status.in_(("pending", "streaming")),
+                    MessageV2.updated_at < cutoff,
+                )
+            ).all()
+        )
+        if not rows:
+            return 0
+        now = utc_now_iso()
+        for row in rows:
+            row.status = "error"
+            row.error_code = "generation_interrupted"
+            row.updated_at = now
+            row.revision += 1
+        self.session.commit()
+        return len(rows)
+
+    def context_messages(
+        self,
+        conversation_id: str,
+        *,
+        before_sequence: int | None = None,
+        limit: int = 30,
+        char_budget: int = 24_000,
+    ) -> list[MessageRead]:
+        """Newest-first bounded history, returned oldest-first for the model."""
+        stmt = select(MessageV2).where(MessageV2.conversation_id == conversation_id)
+        if before_sequence is not None:
+            stmt = stmt.where(MessageV2.sequence < before_sequence)
+        stmt = stmt.where(
+            MessageV2.role.in_(("user", "assistant")),
+            MessageV2.status.in_(("complete", "stopped")),
+            MessageV2.content != "",
+        )
+        rows = list(
+            self.session.scalars(
+                stmt.order_by(MessageV2.sequence.desc()).limit(max(1, limit))
+            ).all()
+        )
+        selected: list[MessageRead] = []
+        used = 0
+        for row in rows:
+            item = self._message_public(row)
+            cost = len(item.content)
+            if used + cost > char_budget:
+                if selected:
+                    break
+                # Keep the newest turn (usually the message just sent) but never
+                # exceed the hard context budget, even when a long system prompt
+                # leaves very little room.
+                item = item.model_copy(update={"content": item.content[:char_budget]})
+                cost = len(item.content)
+            selected.append(item)
+            used += cost
+        selected.reverse()
+        return selected
+
+    def last_user_before(self, conversation_id: str, sequence: int) -> MessageRead | None:
+        row = self.session.scalar(
+            select(MessageV2)
+            .where(
+                MessageV2.conversation_id == conversation_id,
+                MessageV2.sequence < sequence,
+                MessageV2.role == "user",
+                MessageV2.status == "complete",
+            )
+            .order_by(MessageV2.sequence.desc())
+        )
+        return self._message_public(row) if row is not None else None
+
 
     # ---------- attachments (metadata only in B1) ----------
 

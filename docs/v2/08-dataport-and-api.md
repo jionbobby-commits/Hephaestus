@@ -95,6 +95,13 @@ UI / API 路由
 | GET | /ai/providers/{id}/models | 列出该 Provider 可用模型 |
 | POST | /ai/providers/{id}/test | 连接测试，返回模型数量与耗时 |
 | POST | /ai/chat | 显式文本聊天；不自动读取笔记或附件 |
+| GET/POST | /ai/conversations | 会话列表/创建 |
+| GET/PATCH/DELETE | /ai/conversations/{id} | 详情+消息/重命名、换模型、归档/删除 |
+| GET | /ai/conversations/{id}/messages | 消息历史 |
+| POST | /ai/conversations/{id}/messages | 发送消息；stream=true 返回 SSE |
+| POST | /ai/conversations/{id}/messages/{message_id}/regenerate | 重新生成 |
+| POST | /ai/conversations/{id}/stop | 停止当前生成 |
+| POST | /ai/conversations/{id}/messages/{message_id}/stop | 停止指定消息 |
 
 兼容性：
 
@@ -114,6 +121,9 @@ AI 端点由 app/v2/ai/api.py 的子路由承接，前缀仍是 /api/v2/ai。服
 - Base URL 在创建和使用前都做 SSRF 校验；传输层禁用代理与重定向并限制响应大小。
 - 统一错误为 {"error": {...}}，包含 code、message、retryable，不含密钥或请求头。
 - C1 只做文本、非流式调用；不自动发送任何用户内容。
+- C2 新增本机 Capability Token：所有 /api/v2/ai/* 请求必须带 X-Hephaestus-Capability；本机回环地址和平台头都不是鉴权。桌面端通过 pywebview 桥取得 token；Web 浏览器无法安全取得，不能声称可用。
+- C2 会话与消息走 /ai/conversations/*；流式响应为 text/event-stream，事件含 start/delta/done/stopped/error。
+- 对话上下文硬上限 24,000 字符、30 条消息；不自动读取笔记或附件。
 
 ### 4.1 前端如何选择接口
 
@@ -132,13 +142,14 @@ AI 端点由 app/v2/ai/api.py 的子路由承接，前缀仍是 /api/v2/ai。服
 
 - Python：tests/test_v2_dataport.py 6 项、test_v2_api.py 3 项、test_v2_contract_fixture.py 1 项、test_v2_status.py 5 项、test_v2_ui.py 5 项（真实 WebView2，含初始化失败恢复）。
 - 前端 DataPort：tests/frontend/dataport.test.cjs 8 项（Node 内置测试，无 npm 依赖）。
-- 移动端：mobile/tests/contract.test.ts 5 项；命令见 10-contract-tests.md。
+- 移动端：mobile/tests/contract.test.ts 6 项；命令见 10-contract-tests.md。
 - 共享 fixture：contracts/v2/contract_fixture.json；Python 和 TypeScript 都按它校验字段和精确 key 集合。
 
 ## 6. 未完成 / 后续
 
 - 附件上传、下载、存储、引用计数属于阶段 E。
 - Capacitor 原生 SQLite 适配器、真实 Android/iOS 壳属于阶段 G。
-- C1 已完成 AI Provider 配置、密钥托管、模型列表、连接测试和非流式文本聊天；流式响应、聊天 UI、人格、RAG、语音属于 C2 及后续阶段。
-- 前端已接入 /api/v2（B2）；真实用户库仍未迁移，因此当前真实运行仍走 /api/state。AI 端点未接入现有界面。
+- C1 已完成 AI Provider 配置、密钥托管、模型列表、连接测试和非流式文本聊天。
+- C2 已完成对话数据契约、本机 Capability Token、流式引擎、停止/重新生成和 /ai/conversations/* API；聊天 UI、人格、RAG、语音仍属于 C3 及后续阶段。
+- 前端已接入 /api/v2（B2）；真实用户库仍未迁移，因此当前真实运行仍走 /api/state。C2 AI 端点未接入现有界面。
 - 真实库迁移、冲突中心、附件与移动端壳分别属于后续阶段，需单独授权。

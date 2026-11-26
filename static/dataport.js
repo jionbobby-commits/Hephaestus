@@ -18,6 +18,27 @@
   'use strict';
 
   const MODES = ['legacy', 'migration_pending', 'v2_ready', 'migration_failed'];
+  const AI_PREFIX = '/api/v2/ai';
+  let capabilityResolver = null;
+
+  // Desktop injects a pywebview bridge; browsers may set a resolver explicitly.
+  // The token is kept in memory only and never placed in a URL or localStorage.
+  function setCapabilityResolver(resolver) {
+    capabilityResolver = typeof resolver === 'function' ? resolver : null;
+  }
+
+  async function resolveCapability() {
+    try {
+      if (capabilityResolver) return String((await capabilityResolver()) || '');
+      const api = root && root.pywebview && root.pywebview.api;
+      if (api && typeof api.capability_token === 'function') {
+        return String((await api.capability_token()) || '');
+      }
+    } catch (error) {
+      return '';
+    }
+    return '';
+  }
 
   class DataPortError extends Error {
     constructor(message, options = {}) {
@@ -134,10 +155,16 @@
       const timeoutMs = options.timeoutMs == null ? 12000 : options.timeoutMs;
       const timer = controller && timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
       let response;
+      const requestHeaders = {};
+      if (options.body != null) requestHeaders['Content-Type'] = 'application/json';
+      if (path.indexOf(AI_PREFIX) === 0) {
+        const capability = await resolveCapability();
+        if (capability) requestHeaders['X-Hephaestus-Capability'] = capability;
+      }
       try {
         response = await fetchImpl(base + path, {
           method: options.method || 'GET',
-          headers: options.body == null ? undefined : { 'Content-Type': 'application/json' },
+          headers: Object.keys(requestHeaders).length ? requestHeaders : undefined,
           body: options.body == null ? undefined : JSON.stringify(options.body),
           signal: controller ? controller.signal : undefined,
           keepalive: Boolean(options.keepalive),
@@ -475,6 +502,7 @@
 
   return {
     createDataPort,
+    setCapabilityResolver,
     DataPortError,
     ConflictError,
     MODES,
