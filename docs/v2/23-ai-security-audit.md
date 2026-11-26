@@ -216,4 +216,5 @@ MacKeychainStore 使用 security add-generic-password ... -w <secret>，同机�
 - 分支：feat/v2-cross-platform
 - C1.1 实现提交：2ae48c7bc0d3169e2f4c8a01764842dbfa4560c3（用户已提交并推送）
 - 父提交：24ffd23c11dce6b3909923662430ddf6a588e724
+- 可移植性修复提交：32431dda3d3d5c22d6a56edf92518e8a3700d9a0（父提交 be0d429c7e0fb76037652cc13fd11f7bf680a1bf）；仅调整密钥存储测试的可注入保护器并新增失败关闭测试，生产 DPAPI 默认未改。
 - 本报告与 422 修复提交在本文档完成后创建；不推送、不合并 main。
