@@ -390,6 +390,23 @@ def test_api_key_never_returned_and_echoed_key_is_redacted(ai_client):
     assert "[REDACTED]" in response.json()["error"]["details"]["response"]
 
 
+def test_validation_errors_do_not_echo_api_key(ai_client):
+    client, _store, _transport = ai_client
+    provider = _create(client)
+    secret = "sk-validation-secret-12345678"
+
+    response = client.patch(
+        f"/api/v2/ai/providers/{provider['id']}",
+        json={"api_key": secret, "clear_api_key": True},
+    )
+
+    assert response.status_code == 422
+    assert secret not in response.text
+    encoded = json.dumps(response.json(), ensure_ascii=False)
+    assert "[REDACTED]" in encoded
+    assert "api_key" in encoded
+
+
 def test_client_supplied_key_ref_cannot_bind_arbitrary_secret(ai_client):
     client, store, _transport = ai_client
     store.set("provider-stolen", "sk-stolen-secret-12345678")

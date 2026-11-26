@@ -76,21 +76,22 @@ AIProviderParams：temperature 0..2、max_tokens 1..8192、top_p 0..1、timeout_
 - Linux：keyring，或 secret-tool（密钥只经 stdin）。
 - 测试：InMemorySecretStore，仅进程内。
 
-文件密钥存储使用原子替换、权限 0600，只保存 DPAPI 密文；密钥存储损坏时返回 secret_store_unavailable，不读取或回退明文。
+文件密钥存储使用跨进程锁（同目录 .lock）、fsync 和原子替换，权限 0600，只保存 DPAPI 密文；密钥存储损坏时返回 secret_store_unavailable，不读取或回退明文。跨进程锁防止两个进程各自读改写同一 JSON 时丢失 Key。
 
-以下位置不会出现明文密钥：SQLite、API 读取响应、异常日志、测试报告、Git 文件。错误详情中的上游响应会先经过 redact_secret。
+以下位置不会出现明文密钥：SQLite、API 读取响应、异常日志、测试报告、Git 文件、FastAPI 422 校验错误。错误详情中的上游响应会先经过 redact_secret；422 处理器会把请求体中的 api_key/key_ref 等字段替换为 [REDACTED]。
 
 ## 6. 网络安全
 
 validate_base_url 在创建和每次使用前执行：
 
 - 只允许 http/https；拒绝空值、超长、控制字符、userinfo、query、fragment、非法端口。
-- 解析 DNS，拒绝 unspecified、multicast、link-local、reserved，以及默认情况下的 private 地址。
+- 解析 DNS，拒绝 unspecified、multicast、link-local、reserved、CGNAT 100.64.0.0/10，以及默认情况下的 private 地址；先归一化 IPv4-mapped IPv6。
 - Ollama 允许本机/私有地址；在线 API 默认只允许 https，回环地址例外。
 - 需要连接内网在线 API 时，必须显式设置 HEPHAESTUS_AI_ALLOW_PRIVATE_URLS=1，属于管理员级选择。
-- 传输层禁用系统代理与重定向，限制响应体大小，默认超时取自 Provider 参数。
+- resolve_base_url 返回解析后的精确 IP；传输层只连接这些固定地址，禁用系统代理与重定向，限制响应体大小，默认超时取自 Provider 参数。
+- AI 请求体上限 2 MB；聊天最多 50 条、每条 20,000 字符；单进程最多 4 个 Provider 调用；超时 1..120 秒。
 
-AI 路由通过 require_local_client 限制为 127.*、::1、localhost 或 testclient；远程部署必须显式设置 HEPHAESTUS_AI_ALLOW_REMOTE=1。
+AI 路由通过 require_local_client 限制为 127.*、::1、localhost 或 testclient；同时 AISecurityMiddleware 校验 Host，并在存在时校验 Origin/Referer，阻止浏览器 DNS rebinding 和跨站请求。远程部署必须显式设置 HEPHAESTUS_AI_ALLOW_REMOTE=1，且不应把该接口直接暴露到公网。
 
 ## 7. HTTP API
 
@@ -120,6 +121,7 @@ AI 路由通过 require_local_client 限制为 127.*、::1、localhost 或 testc
 ## 9. 测试与限制
 
 - tests/test_v2_ai.py 共 16 项，覆盖 Ollama 正常/不可用、OpenAI 兼容聊天、缺少密钥、密钥不回传、鉴权失败、超时、非法 Base URL、模型不存在、多 Provider 隔离、删除后的默认模型、移动端禁止 Ollama、日志脱敏、旧 API 兼容、重启恢复、密钥轮换/清除。
+- tests/test_v2_ai_security.py 共 24 项，覆盖 Host/Origin/DNS rebinding、CGNAT/IPv4-mapped SSRF、DNS pinning、无重定向、响应上限、跨进程密钥锁、422 密钥回显、key_ref 注入、并发上限和请求体上限。
 - 测试全部使用 FakeTransport，不调用真实付费 API。
 - 移动端 TypeScript 契约与 DataPort 已加入 enabled/is_default/params，并禁止在移动端创建 Ollama；不引入 Ollama 运行时依赖。
 - C1 未实现流式响应、聊天 UI、人格、RAG、语音、附件送入模型。

@@ -1,9 +1,9 @@
-"""URL/SSRF validation and redaction for the AI provider layer.
+"""URL/SSRF validation, DNS pinning helpers and redaction for the AI layer.
 
-The checks below deliberately resolve names and reject metadata/link-local
-addresses. They do not pin DNS: a determined attacker can still change DNS
-between validation and request, so redirects are disabled and future releases
-should reuse the resolved address. This is documented as a residual risk.
+The checks resolve names and reject metadata, link-local and CGNAT addresses.
+resolve_base_url also returns the exact addresses used for the request; the
+transport connects to those pinned addresses (no proxy, no redirects), so DNS
+cannot be rebound between validation and the request.
 """
 from __future__ import annotations
 

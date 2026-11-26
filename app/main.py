@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -9,6 +10,7 @@ from app.database import create_db
 from app.release import VERSION, release_info
 from app.routers import notes, state
 from app.v2.ai.middleware import AISecurityMiddleware
+from app.v2.ai.validation import validation_exception_handler
 from app.v2.api import router as v2_router
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -22,6 +24,8 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Hephaestus", version=VERSION, lifespan=lifespan)
+# Never echo api_key/key_ref values back in FastAPI's 422 diagnostics.
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
 # Local-only boundary for AI routes: Host/Origin validation and a body cap.
 app.add_middleware(AISecurityMiddleware)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

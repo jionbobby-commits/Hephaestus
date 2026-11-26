@@ -2,6 +2,8 @@
 
 状态：实现、测试与本地提交已完成，等待验收。按任务要求在 C1 结束后暂停，未进入 C2。
 
+> C1.1 安全复核已修复本文档第 6、11 节列出的 Host/Origin、DNS rebinding、CGNAT SSRF、脱敏和密钥并发问题；当前安全结论以 [23-ai-security-audit.md](23-ai-security-audit.md) 为准。
+
 ## 1. 结论
 
 C1 已建立与 Provider 无关的后端抽象：统一配置、模型列表、连接测试、文本聊天、超时和错误结构；Ollama 与 OpenAI 兼容 API 各有独立适配器；密钥只存系统密钥库；/api/v2/ai/* 有本机访问限制、Base URL/SSRF 校验和统一错误；旧 /api/state、旧 /notes、B2 前端 DataPort 保持兼容。
