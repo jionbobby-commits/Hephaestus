@@ -66,8 +66,37 @@ def sanitize_validation_errors(errors: list[dict[str, Any]]) -> list[dict[str, A
     return sanitized
 
 
-async def validation_exception_handler(_request, exc: RequestValidationError) -> JSONResponse:
+_AI_PREFIX = "/api/v2/ai"
+
+
+def _is_ai_path(request) -> bool:
+    path = getattr(getattr(request, "url", None), "path", "")
+    return path.startswith(_AI_PREFIX)
+
+
+def _ai_error(status_code: int, code: str, message: str, details=None) -> JSONResponse:
     return JSONResponse(
-        status_code=422,
-        content={"detail": jsonable_encoder(sanitize_validation_errors(exc.errors()))},
+        status_code=status_code,
+        content={
+            "error": {
+                "code": code,
+                "message": message,
+                "provider_id": None,
+                "retryable": False,
+                "details": details or {},
+            }
+        },
     )
+
+
+async def validation_exception_handler(request, exc: RequestValidationError) -> JSONResponse:
+    errors = jsonable_encoder(sanitize_validation_errors(exc.errors()))
+    if _is_ai_path(request):
+        # AI routes share one error envelope, including framework-level 422s.
+        return _ai_error(
+            422,
+            "invalid_request",
+            "请求参数校验失败",
+            {"errors": errors},
+        )
+    return JSONResponse(status_code=422, content={"detail": errors})
