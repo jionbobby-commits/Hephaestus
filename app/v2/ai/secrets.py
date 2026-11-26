@@ -125,6 +125,11 @@ def _default_secret_path() -> Path:
 class FileSecretStore:
     """DPAPI-protected JSON file (Windows). Ciphertext only, atomic writes.
 
+    On non-Windows platforms the default protector deliberately fails closed;
+    production uses KeyringSecretStore/SecretToolStore there. Subclasses may
+    override _protect/_unprotect to exercise the locking and atomic-write code
+    with a test protector without weakening the production default.
+
     A separate lock file serialises read-modify-write cycles across threads and
     processes. Without it two processes can each read the same JSON and the
     second replace() silently loses the first process's key.
@@ -134,6 +139,12 @@ class FileSecretStore:
         self.path = Path(path) if path is not None else _default_secret_path()
         self._lock = threading.Lock()
         self.lock_timeout = max(0.1, float(lock_timeout))
+
+    def _protect(self, data: bytes) -> bytes:
+        return _dpapi_protect(data)
+
+    def _unprotect(self, data: bytes) -> bytes:
+        return _dpapi_unprotect(data)
 
     def _read(self) -> dict[str, str]:
         if not self.path.exists():
@@ -251,12 +262,12 @@ class FileSecretStore:
             return None
         try:
             cipher = base64.b64decode(encoded.encode("ascii"), validate=True)
-            return _dpapi_unprotect(cipher).decode("utf-8")
+            return self._unprotect(cipher).decode("utf-8")
         except (ValueError, UnicodeDecodeError) as exc:
             raise SecretStoreError("密钥存储内容损坏") from exc
 
     def set(self, ref: str, secret: str) -> None:
-        cipher = _dpapi_protect(secret.encode("utf-8"))
+        cipher = self._protect(secret.encode("utf-8"))
         encoded = base64.b64encode(cipher).decode("ascii")
         with self._locked():
             data = self._read()

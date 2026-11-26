@@ -158,15 +158,16 @@ MacKeychainStore 使用 security add-generic-password ... -w <secret>，同机�
 安全测试模块：
 
 - 命令：.venv/Scripts/python.exe -m pytest -q tests/test_v2_ai_security.py
-- 结果：24 passed, 1 warning in 4.26s，EXIT 0
+- Windows 结果：24 passed, 1 skipped, 1 warning in 4.44s，EXIT 0；跳过项是 Windows 上不运行的“无 DPAPI 时必须失败关闭”测试。
+- Linux CI（待 GitHub Actions 验证）：同一模块 25 项均可执行；安全文件测试在非 Windows 上使用注入的测试保护器验证锁/原子写，生产默认保护器仍为 DPAPI 且无 DPAPI 时失败关闭。
 - warning 为既有 StarletteDeprecationWarning：httpx 与 starlette.testclient 弃用。
 
 全量 Python 测试：
 
 - 命令：.venv/Scripts/python.exe -m pytest -q
-- 结果：128 passed, 1 warning in 183.96s，EXIT 0
-- 组成：原有 60 项 + B1 14 + B2 10 + B3 4 + C1 16 + C1.1 24。
-- 日志：C:/Users/Bobby-Zhang/AppData/Local/Temp/heph_c11_pytest_final.txt
+- Windows 结果：128 passed, 1 skipped, 1 warning in 186.68s，EXIT 0。
+- 组成：原有 60 项 + B1 14 + B2 10 + B3 4 + C1 16 + C1.1 25；Windows 跳过 1 项，Linux CI 预计 122 passed + 7 skipped（待验证），此前 4 项安全文件测试因 DPAPI 失败的问题已修复。
+- 日志：C:/Users/Bobby-Zhang/AppData/Local/Temp/heph_c11_pytest_portable.txt
 
 移动端：
 
@@ -194,7 +195,7 @@ MacKeychainStore 使用 security add-generic-password ... -w <secret>，同机�
 - app/v2/ai/adapters.py：ResolvedProvider.resolved_ips，错误详情脱敏。
 - app/v2/ai/validation.py：新增 422 错误脱敏。
 - tests/test_v2_ai.py：FakeTransport 接受 resolved_ips。
-- tests/test_v2_ai_security.py：新增 24 项安全回归测试。
+- tests/test_v2_ai_security.py：新增 25 项安全回归测试，其中非 Windows 使用测试保护器验证文件锁与原子写，并验证无 DPAPI 时失败关闭。
 
 文档：
 

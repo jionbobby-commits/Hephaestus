@@ -121,7 +121,7 @@ AI 路由通过 require_local_client 限制为 127.*、::1、localhost 或 testc
 ## 9. 测试与限制
 
 - tests/test_v2_ai.py 共 16 项，覆盖 Ollama 正常/不可用、OpenAI 兼容聊天、缺少密钥、密钥不回传、鉴权失败、超时、非法 Base URL、模型不存在、多 Provider 隔离、删除后的默认模型、移动端禁止 Ollama、日志脱敏、旧 API 兼容、重启恢复、密钥轮换/清除。
-- tests/test_v2_ai_security.py 共 24 项，覆盖 Host/Origin/DNS rebinding、CGNAT/IPv4-mapped SSRF、DNS pinning、无重定向、响应上限、跨进程密钥锁、422 密钥回显、key_ref 注入、并发上限和请求体上限。
+- tests/test_v2_ai_security.py 共 25 项，覆盖 Host/Origin/DNS rebinding、CGNAT/IPv4-mapped SSRF、DNS pinning、无重定向、响应上限、跨进程密钥锁、422 密钥回显、key_ref 注入、并发上限、请求体上限，以及非 Windows 无 DPAPI 时失败关闭。文件锁/原子写测试在非 Windows 使用注入的测试保护器，不改变生产 DPAPI 默认。
 - 测试全部使用 FakeTransport，不调用真实付费 API。
 - 移动端 TypeScript 契约与 DataPort 已加入 enabled/is_default/params，并禁止在移动端创建 Ollama；不引入 Ollama 运行时依赖。
 - C1 未实现流式响应、聊天 UI、人格、RAG、语音、附件送入模型。

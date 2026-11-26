@@ -6,6 +6,7 @@ import os
 import stat
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -421,9 +422,33 @@ def test_client_supplied_key_ref_cannot_bind_arbitrary_secret(ai_client):
 # ---------- secret file ----------
 
 
+class _TestFileSecretStore(FileSecretStore):
+    """Deterministic protector for lock/atomic tests on every platform."""
+
+    @staticmethod
+    def _protect(data: bytes) -> bytes:
+        return b"test-cipher:" + data[::-1]
+
+    @staticmethod
+    def _unprotect(data: bytes) -> bytes:
+        prefix = b"test-cipher:"
+        if not data.startswith(prefix):
+            raise SecretStoreError("bad test ciphertext")
+        return data[len(prefix):][::-1]
+
+
+def _file_store(path):
+    # Production FileSecretStore is Windows DPAPI; other platforms must use
+    # KeyringSecretStore/SecretToolStore, so exercise the file mechanics with
+    # the deterministic test subclass there.
+    if sys.platform == "win32":
+        return FileSecretStore(path)
+    return _TestFileSecretStore(path)
+
+
 def test_secret_file_is_ciphertext_and_restricted(tmp_path):
     path = tmp_path / "secrets.json"
-    store = FileSecretStore(path)
+    store = _file_store(path)
     store.set("provider-a", "sk-plain-secret-12345678")
     raw = path.read_text(encoding="utf-8")
     assert "sk-plain-secret-12345678" not in raw
@@ -433,9 +458,18 @@ def test_secret_file_is_ciphertext_and_restricted(tmp_path):
         assert mode == 0o600
 
 
+def test_file_secret_store_fails_closed_without_dpapi(tmp_path):
+    if sys.platform == "win32":
+        pytest.skip("DPAPI is available on Windows")
+    path = tmp_path / "secrets.json"
+    with pytest.raises(SecretStoreError):
+        FileSecretStore(path).set("provider-a", "must-not-be-plaintext")
+    assert not path.exists()
+
+
 def test_secret_store_separate_instances_do_not_lose_keys(tmp_path):
     path = tmp_path / "secrets.json"
-    stores = [FileSecretStore(path) for _ in range(4)]
+    stores = [_TestFileSecretStore(path) for _ in range(4)]
 
     def write(index: int):
         stores[index % len(stores)].set(f"provider-{index}", f"secret-{index}")
@@ -444,15 +478,31 @@ def test_secret_store_separate_instances_do_not_lose_keys(tmp_path):
         list(pool.map(write, range(24)))
 
     for index in range(24):
-        assert FileSecretStore(path).get(f"provider-{index}") == f"secret-{index}"
+        assert _TestFileSecretStore(path).get(f"provider-{index}") == f"secret-{index}"
 
 
 def test_secret_store_separate_processes_do_not_lose_keys(tmp_path):
     path = tmp_path / "secrets.json"
-    script = (
-        "import sys; from pathlib import Path; "
-        "from app.v2.ai.secrets import FileSecretStore; "
-        "FileSecretStore(Path(sys.argv[1])).set(sys.argv[2], sys.argv[3])"
+    script = textwrap.dedent(
+        """
+        import sys
+        from pathlib import Path
+        from app.v2.ai.secrets import FileSecretStore, SecretStoreError
+
+        class Store(FileSecretStore):
+            @staticmethod
+            def _protect(data):
+                return b'test-cipher:' + data[::-1]
+
+            @staticmethod
+            def _unprotect(data):
+                prefix = b'test-cipher:'
+                if not data.startswith(prefix):
+                    raise SecretStoreError('bad test ciphertext')
+                return data[len(prefix):][::-1]
+
+        Store(Path(sys.argv[1])).set(sys.argv[2], sys.argv[3])
+        """
     )
     processes = [
         subprocess.Popen(
@@ -467,14 +517,14 @@ def test_secret_store_separate_processes_do_not_lose_keys(tmp_path):
         _out, err = process.communicate(timeout=30)
         assert process.returncode == 0, err.decode(errors="replace")
 
-    store = FileSecretStore(path)
+    store = _TestFileSecretStore(path)
     for index in range(3):
         assert store.get(f"process-{index}") == f"value-{index}"
 
 
 def test_atomic_replace_failure_keeps_previous_secret(tmp_path, monkeypatch):
     path = tmp_path / "secrets.json"
-    store = FileSecretStore(path)
+    store = _TestFileSecretStore(path)
     store.set("provider-a", "old-secret")
 
     def fail_replace(source, destination):
