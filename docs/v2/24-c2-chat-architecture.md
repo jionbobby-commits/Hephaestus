@@ -10,7 +10,7 @@ C2 交付的是可复用的对话能力：
 - Conversation / Message 统一数据模型与 Python、TypeScript DataPort（C2.2）。
 - 多轮上下文、流式输出、停止、重新生成、超时、模型切换与错误归一化（C2.3）。
 - `/api/v2/ai/conversations/*` HTTP API（C2.4）。
-- 21 项 Python 对话测试、移动端契约测试与 tsc 检查。
+- 23 项 Python 对话测试、移动端契约测试与 tsc 检查。
 
 不在 C2：聊天 UI、AI 人格、RAG、附件送入模型、语音、真实迁移、安装包、C3 的任何工作。
 
@@ -149,7 +149,7 @@ C2 **没有执行真实迁移**。表是 additive：
 {"error":{"code":"conversation_busy","message":"...","provider_id":null,"retryable":true,"details":{}}}
 ```
 
-常见错误：401 鉴权、403 跨站/Host、404 会话/消息不存在、409 归档/忙/版本冲突、422 参数、429 并发槽满、502 上游响应异常、503 Provider 不可用/未迁移、504 超时。
+常见错误：401 鉴权、403 跨站/Host、404 会话/消息不存在、409 归档/忙/版本冲突、422 参数、429 并发槽满、502 上游响应异常、503 Provider 不可用/未迁移、504 超时。框架参数校验（422）和依赖错误（例如非法平台头、未迁移 503）也转换为上述结构；旧路由仍保留 FastAPI 的 `detail` 格式。
 
 ## 5. C2.3 对话引擎与流式
 
@@ -201,6 +201,6 @@ C2 **没有执行真实迁移**。表是 additive：
 ## 7. 测试与验证
 
 - Python 全量：见 `docs/v2/25-phase-c2-report.md`。
-- 对话专项：21 项，覆盖 18 项要求 + 幂等流 + 长 system prompt + 崩溃恢复。
+- 对话专项：23 项，覆盖 18 项要求 + 幂等流 + 长 system prompt + 崩溃恢复 + 422/依赖错误统一格式。
 - 移动端：`contract.test.ts` 6 项通过；`tsc --noEmit` 通过。
 - 真实库 SHA256 在 C2 实现前后保持一致。

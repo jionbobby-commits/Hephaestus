@@ -10,7 +10,7 @@ C2 已交付可复用的 AI 对话后端与统一契约：
 - Conversation / Message 数据模型，Python 与移动端 TypeScript DataPort 对齐（C2.2）。
 - 多轮上下文、流式输出、停止、重新生成、超时、模型切换、错误归一化（C2.3）。
 - `/api/v2/ai/conversations/*` API（C2.4）。
-- 21 项 Python 对话测试、6 项移动端契约测试；完整 Python 测试 149 passed + 1 skipped。
+- 23 项 Python 对话测试、6 项移动端契约测试；完整 Python 测试 151 passed + 1 skipped。
 
 本阶段没有聊天 UI，没有助手人格、RAG、附件送入模型、语音、安装包或真实库迁移；这些属于 C3 及后续，不能用“后端完成”冒充“用户界面可用”。
 
@@ -137,7 +137,7 @@ data: {"type":"error","error":{...},"message":{...},"retryable":true}
 {"error":{"code":"conversation_busy","message":"...","provider_id":null,"retryable":true,"details":{}}}
 ~~~
 
-常见状态：401 鉴权、403 Host/跨站、404 不存在、409 归档/忙/revision、422 参数、429 并发槽、502 上游异常、503 不可用/未迁移、504 超时。
+常见状态：401 鉴权、403 Host/跨站、404 不存在、409 归档/忙/revision、422 参数、429 并发槽、502 上游异常、503 不可用/未迁移、504 超时。框架参数校验（422）和依赖错误（非法平台头、未迁移 503 等）也使用该结构；旧路由仍保留 FastAPI `detail`。
 
 ## 7. 安全与兼容性
 
@@ -153,12 +153,12 @@ data: {"type":"error","error":{...},"message":{...},"retryable":true}
 完整 Python：
 
 - 命令：`.venv/Scripts/python.exe -m pytest -q`
-- 结果：**149 passed, 1 skipped, 1 warning in 192.73s**，EXIT 0
+- 结果：**151 passed, 1 skipped, 1 warning in 183.15s**，EXIT 0
 - warning：StarletteDeprecationWarning（httpx 与 starlette.testclient 弃用），既有问题。
-- 组成：旧 60 + B1 14 + B2 10 + B3 4 + C1 16 + C1.1 25 + C2 21 = 150 项。
-- 日志：`C:/Users/Bobby-Zhang/AppData/Local/Temp/heph_c2_pytest_final.txt`
+- 组成：旧 60 + B1 14 + B2 10 + B3 4 + C1 16 + C1.1 25 + C2 23 = 152 项。
+- 日志：`C:/Users/Bobby-Zhang/AppData/Local/Temp/heph_c2_pytest_final2.txt`
 
-C2 对话专项 21 项，覆盖 18 项要求及补充边界：
+C2 对话专项 23 项，覆盖 18 项要求及补充边界：
 
 | 要求 | 测试 |
 |---|---|
@@ -180,8 +180,10 @@ C2 对话专项 21 项，覆盖 18 项要求及补充边界：
 | 重启恢复 | `test_restart_recovery_loads_conversation_and_messages` |
 | Key/Token 不出现在响应与日志 | `test_token_and_api_key_never_leak` |
 | 移动端契约兼容 | `mobile/tests/contract.test.ts` 6 项通过；`test_mobile_platform_is_rejected_for_ollama` |
+| 参数校验统一错误 | `test_validation_error_uses_unified_ai_envelope` |
+| 依赖错误统一错误 | `test_dependency_error_uses_unified_ai_envelope` |
 
-补充覆盖：`client_message_id` 幂等、重复流式请求复用已完成回复、陈旧 streaming 恢复、未知会话 404、旧路由仍可用、长 system prompt 截断。
+补充覆盖：`client_message_id` 幂等、重复流式请求复用已完成回复、陈旧 streaming 恢复、未知会话 404、旧路由仍可用、长 system prompt 截断、422 与依赖错误统一结构。
 
 其他检查：
 
@@ -205,7 +207,7 @@ C2 对话专项 21 项，覆盖 18 项要求及补充边界：
 
 移动端：`mobile/src/{contracts,schema,dataport}.ts`、`mobile/tests/contract.test.ts`。
 
-测试：`tests/test_v2_ai_chat.py`（新增 21 项）、`tests/test_v2_ai.py`、`tests/test_v2_ai_security.py`。
+测试：`tests/test_v2_ai_chat.py`（新增 23 项）、`tests/test_v2_ai.py`、`tests/test_v2_ai_security.py`。
 
 文档：`docs/v2/24-c2-chat-architecture.md`，以及 `06-data-contract.md`、`08-dataport-and-api.md`、`10-contract-tests.md`、`README.md` 更新。
 
@@ -229,9 +231,10 @@ C2 对话专项 21 项，覆盖 18 项要求及补充边界：
 - 父提交：`d0897338cf3bb72911a4a59de56905c7ae49241b`
 - 提交信息：`feat(v2): add C2 chat system with capability auth and streaming`
 - 规模：26 files changed，3,217 insertions(+)，33 deletions(-)
+- 后续提交：`f1029c867927a8bff7029295e1d420deb597ae05`（11-26，422 参数错误统一结构）；`11712913933d160a95574121324f4bae6147a76e`（依赖错误统一结构 + 2 项测试）。
 - 未推送、未合并、未改 main；main 仍为 `82045834f4ff2d864a2ead14d5f423d734fe9b4d`。
-- 本报告单独提交；提交后工作区应为干净状态。
+- 本报告及其计数更新单独提交；提交后工作区应为干净状态。
 
 ## 13. 验收请求
 
-请验收 C2 的 Capability Token、会话/消息契约、流式/停止/重新生成引擎、`/api/v2/ai/conversations/*` API、移动端 DataPort 对齐和 150 项测试。验收通过后再授权 C3；C3 才进入聊天界面、助手人格与用户可见交互。
+请验收 C2 的 Capability Token、会话/消息契约、流式/停止/重新生成引擎、`/api/v2/ai/conversations/*` API、移动端 DataPort 对齐和 152 项测试。验收通过后再授权 C3；C3 才进入聊天界面、助手人格与用户可见交互。

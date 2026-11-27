@@ -34,8 +34,8 @@
 
 - 分支：`feat/v2-cross-platform`
 - 基线：`main` / `3e341a5aeb486fb825fae2f71a0c9f7955ba040f`
-- 现有测试：150 项；Windows 149 passed + 1 skipped（1 warning：Starlette httpx/TestClient 弃用提示）
-- 其中 B1 新增 14 项 Python 测试；B2 新增 10 项 Python 测试；B3 新增 4 项迁移测试（8 项迁移测试总计）；C1 新增 16 项 AI 测试；C1.1 新增 25 项 AI 安全测试；C2 新增 21 项对话测试
+- 现有测试：152 项；Windows 151 passed + 1 skipped（1 warning：Starlette httpx/TestClient 弃用提示）
+- 其中 B1 新增 14 项 Python 测试；B2 新增 10 项 Python 测试；B3 新增 4 项迁移测试（8 项迁移测试总计）；C1 新增 16 项 AI 测试；C1.1 新增 25 项 AI 安全测试；C2 新增 23 项对话测试
 - 前端 DataPort Node 测试：8 passed；移动端 6 项 Node 契约测试；tsc --noEmit 通过
 - 真实用户数据：`frontend_state` 1 行（7 条笔记、4 个标签）；`notes` 表 0 行
 - 真实库 SHA256 仍为 e16595...；未执行真实迁移、未修改用户数据、未构建任何新平台安装包
@@ -44,7 +44,7 @@
 - B3 已完成真实数据只读盘点、独立备份、副本迁移、逐字段校验、幂等、失败恢复、回滚演练和迁移副本的真实 UI 验收
 - C1 已完成统一 AI Provider 抽象、Ollama/OpenAI 兼容适配器、密钥托管、SSRF 防护、/api/v2/ai/* 与 16 项测试；未实现聊天 UI 与模型自动读取笔记
 - C1.1 已完成 Host/Origin 边界、DNS pinning、CGNAT/IPv4-mapped SSRF 修复、422 密钥回显修复、跨进程密钥锁、请求体/并发限制与 25 项安全测试
-- C2 已完成本机 Capability Token、Conversation/Message 契约、Python/移动 DataPort、流式/停止/重新生成、对话 API 与 21 项对话测试；Web 浏览器无法安全取得 token，因此 Web 端 AI 默认不可用
+- C2 已完成本机 Capability Token、Conversation/Message 契约、Python/移动 DataPort、流式/停止/重新生成、对话 API 与 23 项对话测试；Web 浏览器无法安全取得 token，因此 Web 端 AI 默认不可用
 - **真实库未迁移**；B3.4 迁移预案未执行，C1/C1.1/C2 未修改真实库
 
 ## 待确认
