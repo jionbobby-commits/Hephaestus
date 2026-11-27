@@ -231,9 +231,10 @@ C2 对话专项 23 项，覆盖 18 项要求及补充边界：
 - 父提交：`d0897338cf3bb72911a4a59de56905c7ae49241b`
 - 提交信息：`feat(v2): add C2 chat system with capability auth and streaming`
 - 规模：26 files changed，3,217 insertions(+)，33 deletions(-)
-- 后续提交：`f1029c867927a8bff7029295e1d420deb597ae05`（11-26，422 参数错误统一结构）；`11712913933d160a95574121324f4bae6147a76e`（依赖错误统一结构 + 2 项测试）。
-- 未推送、未合并、未改 main；main 仍为 `82045834f4ff2d864a2ead14d5f423d734fe9b4d`。
-- 本报告及其计数更新单独提交；提交后工作区应为干净状态。
+- 后续提交：`f1029c867927a8bff7029295e1d420deb597ae05`（11-26，422 参数错误统一结构）；`11712913933d160a95574121324f4bae6147a76e`（依赖错误统一结构 + 2 项测试）；`d94beb178a9aa25a76e3a5cb8fd2159ea175c55c`（测试计数与错误说明更新）。
+- `origin/feat/v2-cross-platform` 当前为 `f1029c8`；本地领先 origin（含上述补丁与文档提交），尚未推送。
+- 未合并、未改 main；main 仍为 `82045834f4ff2d864a2ead14d5f423d734fe9b4d`。
+- 提交后工作区应为干净状态。
 
 ## 13. 验收请求
 
