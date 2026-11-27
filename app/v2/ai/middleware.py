@@ -123,9 +123,11 @@ def _origin_parts(value: str, *, allow_path: bool = False) -> tuple[str, int]:
     parts = urlsplit(value)
     if parts.scheme not in {"http", "https"} or not parts.hostname:
         raise ValueError("bad origin")
-    if parts.username or parts.password or parts.query or parts.fragment:
+    if parts.username or parts.password or parts.fragment:
         raise ValueError("bad origin")
-    if not allow_path and parts.path not in {"", "/"}:
+    # A Referer may legitimately carry the current page's path and query
+    # (for example "/?desktop=1"). Neither contributes to the origin check.
+    if not allow_path and (parts.path not in {"", "/"} or parts.query):
         raise ValueError("bad origin path")
     host = parts.hostname.strip().lower().rstrip(".")
     if any(ord(ch) < 33 or ord(ch) > 126 for ch in host):

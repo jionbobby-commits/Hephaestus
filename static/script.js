@@ -663,6 +663,7 @@ const Store = (() => {
     QUOTA, day, subscribe, setConflictHandler, waitForIdle,
     get mode() { return mode; }, get modeLabel() { return modeLabel(); }, get adapter() { return adapter; },
     get status() { return status; }, get saving() { return saving; }, get label() { return label(); },
+    get port() { return port; },
     get diagnostics() { return port ? port.diagnostics : []; }, get lastError() { return lastError; },
     get conflict() { return conflict; },
   };

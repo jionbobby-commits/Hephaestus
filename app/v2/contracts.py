@@ -33,6 +33,15 @@ HexColor = Annotated[str, StringConstraints(pattern=r"^#[0-9a-fA-F]{6}$")]
 IsoUtc = Annotated[str, StringConstraints(pattern=r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")]
 
 
+def _contains_persona_secret(value: str) -> bool:
+    return bool(
+        re.search(r"sk-[A-Za-z0-9_-]{8,}", value)
+        or re.search(r"Bearer\s+[A-Za-z0-9._~+/-]{8,}", value, re.IGNORECASE)
+        or re.search(r"X-Hephaestus-Capability", value, re.IGNORECASE)
+        or re.search(r"-----BEGIN [A-Z ]*PRIVATE KEY-----", value)
+    )
+
+
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
@@ -175,6 +184,29 @@ class AppSettings(BaseModel):
     assistant_style: Literal["professional", "concise", "friendly", "academic", "creative", "custom"] = "friendly"
     response_length: Literal["short", "medium", "long"] = "medium"
     default_model: str | None = Field(default=None, max_length=200)
+    assistant_custom_prompt: str | None = Field(default=None, max_length=4_000)
+
+    @field_validator("assistant_name")
+    @classmethod
+    def _persona_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("助手名称不能为空")
+        if _contains_persona_secret(value):
+            raise ValueError("助手名称不能包含秘密信息")
+        return value
+
+    @field_validator("assistant_custom_prompt")
+    @classmethod
+    def _persona_prompt(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            return None
+        if _contains_persona_secret(value):
+            raise ValueError("人格提示词不能包含 API Key、Capability Token 或私钥")
+        return value
 
 
 class AppSettingsPatch(BaseModel):
@@ -187,6 +219,31 @@ class AppSettingsPatch(BaseModel):
     assistant_style: Literal["professional", "concise", "friendly", "academic", "creative", "custom"] | None = None
     response_length: Literal["short", "medium", "long"] | None = None
     default_model: str | None = Field(default=None, max_length=200)
+    assistant_custom_prompt: str | None = Field(default=None, max_length=4_000)
+
+    @field_validator("assistant_name")
+    @classmethod
+    def _patch_persona_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("助手名称不能为空")
+        if _contains_persona_secret(value):
+            raise ValueError("助手名称不能包含秘密信息")
+        return value
+
+    @field_validator("assistant_custom_prompt")
+    @classmethod
+    def _patch_persona_prompt(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            return None
+        if _contains_persona_secret(value):
+            raise ValueError("人格提示词不能包含 API Key、Capability Token 或私钥")
+        return value
 
 
 AIProviderKind = Literal["ollama", "openai", "anthropic", "gemini", "deepseek", "qwen", "custom"]

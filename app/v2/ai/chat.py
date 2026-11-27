@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.v2.ai.adapters import ResolvedProvider
 from app.v2.ai.errors import AIError
+from app.v2.ai.persona import compose_system_prompt
 from app.v2.ai.service import AIProviderService
 from app.v2.contracts import (
     AIChatMessage,
@@ -35,6 +36,12 @@ logger = logging.getLogger("hephaestus.ai.chat")
 MAX_ASSISTANT_CHARS = 20_000
 MAX_CONTEXT_CHARS = 24_000
 MAX_CONTEXT_MESSAGES = 30
+
+# Process-wide registries shared by every request-scoped ChatService instance.
+_SHARED_LOCKS: dict[str, threading.Lock] = {}
+_SHARED_LOCKS_GUARD = threading.Lock()
+_SHARED_ACTIVE: dict[str, tuple[str, threading.Event]] = {}
+_SHARED_ACTIVE_GUARD = threading.Lock()
 
 
 @dataclass
@@ -62,10 +69,16 @@ class ChatService:
         self.providers = providers
         self.session_factory = session_factory
         self.platform = platform
-        self._locks: dict[str, threading.Lock] = {}
-        self._locks_guard = threading.Lock()
-        self._active: dict[str, tuple[str, threading.Event]] = {}
-        self._active_guard = threading.Lock()
+        # FastAPI builds ChatService per request, while a generation is driven
+        # from the streaming request's thread and stopped from a separate
+        # request. Cancellation events and conversation locks therefore have to
+        # be shared by every instance in this process; instance-level state
+        # would let /stop miss the live event (generation finished as
+        # "complete") and would let two sends race past "conversation_busy".
+        self._locks = _SHARED_LOCKS
+        self._locks_guard = _SHARED_LOCKS_GUARD
+        self._active = _SHARED_ACTIVE
+        self._active_guard = _SHARED_ACTIVE_GUARD
 
     # ---------- conversations ----------
 
@@ -284,7 +297,11 @@ class ChatService:
         row, provider, adapter = self.providers.resolve_for_chat(
             conversation.provider_id, conversation.model or None
         )
-        return provider, adapter, conversation.system_prompt
+        # C3 persona: settings are the source of truth, and the fixed safety
+        # block is appended inside compose_system_prompt. A conversation-level
+        # prompt is an additional instruction, never a replacement.
+        settings = self.port.get_settings()
+        return provider, adapter, compose_system_prompt(settings, conversation.system_prompt)
 
     # ---------- generation ----------
 

@@ -128,7 +128,7 @@ def run_ui(url: str, mode: str, phase: str, db: Path, proc_holder: dict[str, Any
           tags: window.HephaestusStore ? HephaestusStore.data.tags : [],
           saveState: document.querySelector('#saveState') ? document.querySelector('#saveState').textContent : null,
           storage: document.querySelector('#storage') ? document.querySelector('#storage').innerText : null,
-          modal: document.querySelector('.modal') ? document.querySelector('.modal').innerText : null,
+          modal: (() => { const back = [...document.querySelectorAll('.modal-back')].find(b => !b.hidden && b.querySelector('.modal')); return back ? back.querySelector('.modal').innerText : null; })(),
           list: document.querySelector('#list') ? document.querySelector('#list').innerText : null
         })""")
         return json.loads(raw)
@@ -157,7 +157,7 @@ def run_ui(url: str, mode: str, phase: str, db: Path, proc_holder: dict[str, Any
 
     def click_modal(label: str) -> bool:
         return bool(js(f"""(() => {{
-          const modal = document.querySelector('.modal'); if (!modal) return false;
+          const modal = document.querySelector('.modal-back:not([hidden]) .modal'); if (!modal) return false;
           const button = [...modal.querySelectorAll('footer button')].find(b => b.textContent.trim() === {json.dumps(label)});
           if (!button) return false; button.click(); return true;
         }})()"""))
@@ -270,8 +270,8 @@ def run_ui(url: str, mode: str, phase: str, db: Path, proc_holder: dict[str, Any
             wait_idle()
             if select_note("B2 v2 已编辑"):
                 click("#editTagsBtn")
-                if wait_for("document.querySelector('.modal .chip[data-t]')", 5):
-                    js("""(() => { const b = [...document.querySelectorAll('.modal .chip[data-t]')].find(x => x.textContent.includes('B2标签')); if (b) b.click(); return true; })()""")
+                if wait_for("document.querySelector('.modal-back:not([hidden]) .chip[data-t]')", 5):
+                    js("""(() => { const b = [...document.querySelectorAll('.modal-back:not([hidden]) .chip[data-t]')].find(x => x.textContent.includes('B2标签')); if (b) b.click(); return true; })()""")
                     click_modal("完成")
             wait_idle()
             record("after_tag")
@@ -303,7 +303,7 @@ def run_ui(url: str, mode: str, phase: str, db: Path, proc_holder: dict[str, Any
                     step("server_conflict_patch", {"status": status, "revision": payload.get("revision") if isinstance(payload, dict) else None})
                     set_value("#title", "B2 冲突最终")
                     time.sleep(1.0)
-                    modal_seen = wait_for("document.querySelector('.modal') && document.querySelector('.modal').innerText.includes('检测到编辑冲突')", 20)
+                    modal_seen = wait_for("(() => { const m = document.querySelector('.modal-back:not([hidden]) .modal'); return !!m && m.innerText.includes('检测到编辑冲突'); })()", 20)
                     record("conflict_modal")
                     result["conflict"] = {"modal_seen": modal_seen, "modal_text": snapshot()["modal"]}
                     if modal_seen:

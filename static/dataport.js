@@ -20,6 +20,10 @@
   const MODES = ['legacy', 'migration_pending', 'v2_ready', 'migration_failed'];
   const AI_PREFIX = '/api/v2/ai';
   let capabilityResolver = null;
+  let clientPlatform = 'web';
+  function setClientPlatform(platform) {
+    clientPlatform = ['desktop', 'web', 'mobile'].includes(platform) ? platform : 'web';
+  }
 
   // Desktop injects a pywebview bridge; browsers may set a resolver explicitly.
   // The token is kept in memory only and never placed in a URL or localStorage.
@@ -147,7 +151,7 @@
 
   function createHttp(fetchImpl, baseUrl) {
     const base = String(baseUrl || '').replace(/\/+$/, '');
-    return async function request(path, options = {}) {
+    const request = async function request(path, options = {}) {
       if (typeof fetchImpl !== 'function') {
         throw new DataPortError('当前环境缺少 fetch，无法连接本地服务', { code: 'no_fetch' });
       }
@@ -160,6 +164,7 @@
       if (path.indexOf(AI_PREFIX) === 0) {
         const capability = await resolveCapability();
         if (capability) requestHeaders['X-Hephaestus-Capability'] = capability;
+        requestHeaders['X-Hephaestus-Platform'] = clientPlatform;
       }
       try {
         response = await fetchImpl(base + path, {
@@ -195,6 +200,116 @@
         throw new DataPortError(message, { status: response.status, details: payload });
       }
       return payload;
+    };
+
+    request.stream = async function stream(path, options = {}) {
+      if (typeof fetchImpl !== 'function') {
+        throw new DataPortError('当前环境缺少 fetch，无法连接本地服务', { code: 'no_fetch' });
+      }
+      const requestHeaders = {};
+      if (options.body != null) requestHeaders['Content-Type'] = 'application/json';
+      if (path.indexOf(AI_PREFIX) === 0) {
+        const capability = await resolveCapability();
+        if (capability) requestHeaders['X-Hephaestus-Capability'] = capability;
+        requestHeaders['X-Hephaestus-Platform'] = clientPlatform;
+      }
+      let response;
+      try {
+        response = await fetchImpl(base + path, {
+          method: options.method || 'GET',
+          headers: Object.keys(requestHeaders).length ? requestHeaders : undefined,
+          body: options.body == null ? undefined : JSON.stringify(options.body),
+          signal: options.signal,
+          credentials: 'same-origin',
+          cache: 'no-store',
+        });
+      } catch (error) {
+        throw new DataPortError('无法连接本地服务，请确认 Hephaestus 正在运行', {
+          code: error && error.name === 'AbortError' ? 'aborted' : 'network',
+          cause: error,
+        });
+      }
+      if (!response.ok) {
+        let payload = null;
+        try { const text = await response.text(); payload = text ? JSON.parse(text) : null; } catch { payload = null; }
+        const detail = payload && typeof payload === 'object'
+          ? (payload.detail || payload.message || JSON.stringify(payload))
+          : ('HTTP ' + response.status);
+        const message = typeof detail === 'string' ? detail : ('HTTP ' + response.status);
+        if (response.status === 409) throw new ConflictError(message, { status: 409, details: payload });
+        throw new DataPortError(message, { status: response.status, details: payload });
+      }
+      return response;
+    };
+
+    return request;
+  }
+
+  function createSseParser(onEvent) {
+    let buffer = '';
+    function emit(block) {
+      const data = block.split(/\r?\n/)
+        .filter(line => line.startsWith('data:'))
+        .map(line => line.slice(5).replace(/^ /, ''))
+        .join('\n');
+      if (!data) return;
+      let event;
+      try {
+        event = JSON.parse(data);
+      } catch (error) {
+        onEvent({ type: 'parse_error', message: '流式数据解析失败', raw: data });
+        return;
+      }
+      onEvent(event);
+    }
+    return {
+      push(chunk) {
+        buffer += String(chunk == null ? '' : chunk);
+        for (;;) {
+          const match = buffer.match(/\r?\n\r?\n/);
+          if (!match) break;
+          const index = match.index;
+          const block = buffer.slice(0, index);
+          buffer = buffer.slice(index + match[0].length);
+          emit(block);
+        }
+      },
+      flush() {
+        if (buffer.trim()) emit(buffer);
+        buffer = '';
+      },
+    };
+  }
+
+  function normalizeAIConversation(row) {
+    const source = asObject(row);
+    return {
+      id: String(source.id || ''),
+      title: String(source.title || '新对话'),
+      providerId: source.provider_id || '',
+      model: source.model || '',
+      systemPrompt: source.system_prompt || '',
+      archived: Boolean(source.archived_at),
+      revision: Number(source.revision) || 1,
+      messageCount: Number(source.message_count) || 0,
+      createdAt: source.created_at || '',
+      updatedAt: source.updated_at || '',
+    };
+  }
+
+  function normalizeAIMessage(row) {
+    const source = asObject(row);
+    return {
+      id: String(source.id || ''),
+      conversationId: String(source.conversation_id || ''),
+      role: source.role === 'assistant' ? 'assistant' : 'user',
+      content: String(source.content || ''),
+      status: source.status || 'complete',
+      sequence: Number(source.sequence) || 0,
+      clientId: source.client_id || '',
+      errorCode: source.error_code || '',
+      createdAt: source.created_at || '',
+      updatedAt: source.updated_at || '',
     };
   }
 
@@ -290,6 +405,44 @@
       return notes;
     }
 
+    function aiPath(suffix) { return AI_PREFIX + suffix; }
+
+    async function listAIConversations(options = {}) {
+      const query = '?page=' + (Number(options.page) || 1)
+        + '&page_size=' + (Number(options.pageSize) || 50)
+        + '&include_archived=' + (options.includeArchived ? 'true' : 'false');
+      const page = await request(aiPath('/conversations' + query));
+      return {
+        items: asArray(page && page.items).map(normalizeAIConversation),
+        total: Number(page && page.total) || 0,
+        page: Number(page && page.page) || 1,
+        pageSize: Number(page && page.page_size) || 50,
+      };
+    }
+
+    async function getAIConversation(id, options = {}) {
+      const query = '?page=' + (Number(options.page) || 1) + '&page_size=' + (Number(options.pageSize) || 100);
+      const detail = await request(aiPath('/conversations/' + encodeURIComponent(id) + query));
+      return {
+        conversation: normalizeAIConversation(detail && detail.conversation),
+        messages: asArray(detail && detail.messages).map(normalizeAIMessage),
+        total: Number(detail && detail.total) || 0,
+      };
+    }
+
+    async function listAIMessages(id, options = {}) {
+      const query = '?page=' + (Number(options.page) || 1) + '&page_size=' + (Number(options.pageSize) || 100);
+      const page = await request(aiPath('/conversations/' + encodeURIComponent(id) + '/messages' + query));
+      return {
+        items: asArray(page && page.items).map(normalizeAIMessage),
+        total: Number(page && page.total) || 0,
+      };
+    }
+
+    async function streamAIResponse(path, payload, options = {}) {
+      return request.stream(aiPath(path), { method: 'POST', body: payload, signal: options.signal });
+    }
+
     return {
       async load() {
         const [tags, settings, live, trashed] = await Promise.all([
@@ -369,6 +522,54 @@
         return settingsToUi(await request('/api/v2/settings', { method: 'PATCH', body }));
       },
       invalidateTags() { tagCache = null; },
+      async listAIProviders() {
+        return asArray(await request(aiPath('/providers'))).map(asObject);
+      },
+      async createAIProvider(payload) {
+        return asObject(await request(aiPath('/providers'), { method: 'POST', body: payload }));
+      },
+      async updateAIProvider(id, payload) {
+        return asObject(await request(aiPath('/providers/' + encodeURIComponent(id)), { method: 'PATCH', body: payload }));
+      },
+      async deleteAIProvider(id) {
+        await request(aiPath('/providers/' + encodeURIComponent(id)), { method: 'DELETE' });
+      },
+      async listAIProviderModels(id) {
+        const result = await request(aiPath('/providers/' + encodeURIComponent(id) + '/models'));
+        return asArray(result && result.models);
+      },
+      async testAIProvider(id) {
+        return asObject(await request(aiPath('/providers/' + encodeURIComponent(id) + '/test'), { method: 'POST', timeoutMs: 60000 }));
+      },
+      listAIConversations,
+      getAIConversation,
+      listAIMessages,
+      async createAIConversation(payload) {
+        return normalizeAIConversation(await request(aiPath('/conversations'), { method: 'POST', body: payload }));
+      },
+      async updateAIConversation(id, payload) {
+        return normalizeAIConversation(await request(aiPath('/conversations/' + encodeURIComponent(id)), { method: 'PATCH', body: payload }));
+      },
+      async deleteAIConversation(id) {
+        await request(aiPath('/conversations/' + encodeURIComponent(id)), { method: 'DELETE' });
+      },
+      async sendAIMessage(id, payload, options = {}) {
+        return streamAIResponse('/conversations/' + encodeURIComponent(id) + '/messages', payload, options);
+      },
+      async regenerateAIMessage(id, messageId, payload, options = {}) {
+        return streamAIResponse('/conversations/' + encodeURIComponent(id) + '/messages/' + encodeURIComponent(messageId) + '/regenerate', payload, options);
+      },
+      async stopAIGeneration(id, messageId) {
+        return asObject(await request(aiPath('/conversations/' + encodeURIComponent(id) + '/stop'), {
+          method: 'POST', body: messageId ? { message_id: messageId } : {},
+        }));
+      },
+      async getSettings() {
+        return asObject(await request('/api/v2/settings'));
+      },
+      async updateSettings(patch) {
+        return asObject(await request('/api/v2/settings', { method: 'PATCH', body: patch }));
+      },
     };
   }
 
@@ -408,6 +609,11 @@
   }
 
   function createDataPort(options = {}) {
+    if (!options.platform) {
+      setClientPlatform(root && root.pywebview && root.pywebview.api ? 'desktop' : 'web');
+    } else {
+      setClientPlatform(options.platform);
+    }
     const fetchImpl = options.fetchImpl || (typeof fetch === 'function' ? fetch.bind(root) : null);
     const logger = options.logger || ((message, detail) => {
       if (root && root.console && root.console.info) root.console.info('[Hephaestus DataPort] ' + message, detail || '');
@@ -496,6 +702,23 @@
       deleteTag(id) { assertV2(); return v2.deleteTag(id); },
       saveSettings(ui) { assertV2(); return v2.saveSettings(ui); },
       fetchTags() { assertV2(); return v2.fetchTags(); },
+      listAIProviders() { assertV2(); return v2.listAIProviders(); },
+      createAIProvider(payload) { assertV2(); return v2.createAIProvider(payload); },
+      updateAIProvider(id, payload) { assertV2(); return v2.updateAIProvider(id, payload); },
+      deleteAIProvider(id) { assertV2(); return v2.deleteAIProvider(id); },
+      listAIProviderModels(id) { assertV2(); return v2.listAIProviderModels(id); },
+      testAIProvider(id) { assertV2(); return v2.testAIProvider(id); },
+      listAIConversations(options) { assertV2(); return v2.listAIConversations(options); },
+      getAIConversation(id, options) { assertV2(); return v2.getAIConversation(id, options); },
+      listAIMessages(id, options) { assertV2(); return v2.listAIMessages(id, options); },
+      createAIConversation(payload) { assertV2(); return v2.createAIConversation(payload); },
+      updateAIConversation(id, payload) { assertV2(); return v2.updateAIConversation(id, payload); },
+      deleteAIConversation(id) { assertV2(); return v2.deleteAIConversation(id); },
+      sendAIMessage(id, payload, options) { assertV2(); return v2.sendAIMessage(id, payload, options); },
+      regenerateAIMessage(id, messageId, payload, options) { assertV2(); return v2.regenerateAIMessage(id, messageId, payload, options); },
+      stopAIGeneration(id, messageId) { assertV2(); return v2.stopAIGeneration(id, messageId); },
+      getSettings() { assertV2(); return v2.getSettings(); },
+      updateSettings(patch) { assertV2(); return v2.updateSettings(patch); },
       refreshTags() { assertV2(); v2.invalidateTags(); return v2.load(); },
     };
   }
@@ -503,6 +726,10 @@
   return {
     createDataPort,
     setCapabilityResolver,
+    setClientPlatform,
+    createSseParser,
+    normalizeAIConversation,
+    normalizeAIMessage,
     DataPortError,
     ConflictError,
     MODES,

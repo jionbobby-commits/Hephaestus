@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Hephaestus 记事本</title>
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/chat.css">
 </head>
 <body>
 <div class="app" id="app">
@@ -13,6 +14,11 @@
       <span class="brand-logo" data-icon="sprout" data-size="34"></span>
       <div><div class="brand-name">Hephaestus</div><div class="brand-sub">Note · Create · Organize</div></div>
     </div>
+    <button class="assistant-entry" id="assistantBtn" type="button" title="打开 AI 助手">
+      <span class="assistant-orb" aria-hidden="true">AI</span>
+      <span class="assistant-copy"><b>赫淮斯托斯</b><small>AI 助手</small></span>
+      <span class="assistant-key">AI</span>
+    </button>
     <nav class="nav" id="nav"></nav>
     <div class="tag-head"><span>标签</span><button class="icon-btn" id="tagManageBtn" title="标签管理" data-icon="plus"></button></div>
     <ul class="tag-list" id="tagList"></ul>
@@ -112,9 +118,110 @@
     </div>
   </main>
 </div>
+<section class="chat-workspace" id="chatWorkspace" hidden aria-label="AI 对话工作台">
+  <aside class="chat-side" id="chatSide">
+    <div class="chat-side-head">
+      <div><div class="chat-eyebrow">HEPHAESTUS · AI</div><h2>对话</h2></div>
+      <button class="icon-btn" id="chatCloseBtn" type="button" title="关闭 AI 助手" aria-label="关闭 AI 助手">✕</button>
+    </div>
+    <button class="chat-new" id="chatNewBtn" type="button"><span>＋</span> 新建对话</button>
+    <div class="chat-conv-list" id="chatConvList" role="list"></div>
+    <div class="chat-side-foot">
+      <button type="button" id="chatPersonaBtn">人格设置</button>
+      <button type="button" id="chatProviderBtn">AI 配置</button>
+      <button type="button" id="chatRefreshBtn" title="刷新会话">刷新</button>
+    </div>
+  </aside>
+  <main class="chat-main">
+    <header class="chat-head">
+      <button class="icon-btn chat-menu-btn" id="chatMenuBtn" type="button" title="会话列表" aria-label="会话列表">☰</button>
+      <div class="chat-head-title">
+        <h3 id="chatTitle">赫淮斯托斯</h3>
+        <div class="chat-meta" id="chatMeta">本地优先 · 数据保存在你的设备</div>
+      </div>
+      <div class="chat-controls">
+        <label class="chat-select"><span>配置</span><select id="chatProviderSel" aria-label="AI 配置"></select></label>
+        <label class="chat-select"><span>模型</span><select id="chatModelSel" aria-label="模型"></select></label>
+        <button class="chat-ghost" id="chatArchiveBtn" type="button" title="归档或取消归档当前对话">归档</button>
+        <button class="chat-ghost" id="chatRenameBtn" type="button" title="重命名当前对话">重命名</button>
+        <button class="chat-ghost danger" id="chatDeleteBtn" type="button" title="删除当前对话">删除</button>
+      </div>
+    </header>
+    <div class="chat-notice" id="chatNotice" hidden></div>
+    <div class="chat-messages" id="chatMessages" aria-live="polite">
+      <div class="chat-empty" id="chatEmpty">
+        <div class="chat-empty-mark">H</div>
+        <h3>赫淮斯托斯</h3>
+        <p>记录、整理、思考。选择一个已配置的 AI，开始一段对话。</p>
+        <button class="btn primary" id="chatEmptyNew" type="button">新建对话</button>
+      </div>
+    </div>
+    <footer class="chat-composer">
+      <div class="chat-compose-box">
+        <textarea id="chatInput" rows="1" maxlength="20000" placeholder="输入消息，Enter 发送，Shift+Enter 换行" aria-label="消息输入"></textarea>
+        <div class="chat-compose-actions">
+          <span class="chat-status" id="chatStatus">就绪</span>
+          <button class="chat-stop" id="chatStopBtn" type="button" hidden>停止生成</button>
+          <button class="chat-send" id="chatSendBtn" type="button" title="发送消息">发送</button>
+        </div>
+      </div>
+      <div class="chat-disclaimer">AI 生成内容仅供参考。对话保存在本地数据库，不写入浏览器 localStorage。</div>
+    </footer>
+  </main>
+</section>
+
+<div class="modal-back" id="personaModal" hidden>
+  <div class="modal chat-modal" role="dialog" aria-modal="true" aria-labelledby="personaTitle">
+    <div class="chat-modal-head"><h3 id="personaTitle">助手人格</h3><button class="icon-btn" data-close="personaModal" type="button" aria-label="关闭">✕</button></div>
+    <p class="chat-modal-sub">人格设置保存在本地数据中，并在每次对话时注入系统提示词。安全约束始终优先，不能被自定义内容覆盖。</p>
+    <div class="chat-form-grid">
+      <label>助手名称<input id="personaName" maxlength="32" autocomplete="off"></label>
+      <label>回答风格<select id="personaStyle"></select></label>
+      <label>回答长度<select id="personaLength"><option value="short">简短</option><option value="medium">适中</option><option value="long">详细</option></select></label>
+    </div>
+    <label class="chat-field">自定义风格提示词
+      <textarea id="personaPrompt" rows="4" maxlength="4000" placeholder="例如：回答时先给出结论，再用三点说明理由。"></textarea>
+      <small><span id="personaCount">0</span> / 4000 · 不要填写 API Key、Token 或私钥</small>
+    </label>
+    <div class="persona-preview"><span>预览</span><p id="personaPreview"></p></div>
+    <div class="chat-modal-actions">
+      <button class="chat-ghost" id="personaResetBtn" type="button">恢复默认</button>
+      <span class="grow"></span>
+      <button class="chat-ghost" data-close="personaModal" type="button">取消</button>
+      <button class="btn primary" id="personaSaveBtn" type="button">保存人格</button>
+    </div>
+    <div class="chat-form-status" id="personaStatus"></div>
+  </div>
+</div>
+
+<div class="modal-back" id="providerModal" hidden>
+  <div class="modal chat-modal wide" role="dialog" aria-modal="true" aria-labelledby="providerTitle">
+    <div class="chat-modal-head"><h3 id="providerTitle">AI 配置</h3><button class="icon-btn" data-close="providerModal" type="button" aria-label="关闭">✕</button></div>
+    <p class="chat-modal-sub">支持本机 Ollama 与在线 API。密钥由系统密钥存储保管，不进入前端缓存、日志或 Git。</p>
+    <p class="provider-hint" id="providerHint"></p>
+    <div class="provider-layout">
+      <div class="provider-list" id="providerList"></div>
+      <form class="provider-form" id="providerForm">
+        <label>类型<select id="providerKind"><option value="ollama">Ollama（本机）</option><option value="openai">OpenAI</option><option value="deepseek">DeepSeek</option><option value="qwen">通义千问</option><option value="custom">自定义兼容接口</option></select></label>
+        <label>名称<input id="providerLabel" maxlength="64" placeholder="例如：本机 Ollama" autocomplete="off"></label>
+        <label>接口地址<input id="providerBaseUrl" maxlength="2048" placeholder="http://127.0.0.1:11434" autocomplete="off"></label>
+        <label>默认模型<input id="providerModel" maxlength="200" placeholder="qwen2.5:7b" autocomplete="off"></label>
+        <label>API Key<input id="providerKey" type="password" autocomplete="new-password" placeholder="编辑时留空表示不修改"></label>
+        <label class="check"><input id="providerClearKey" type="checkbox"> 清除已保存的密钥</label>
+        <div class="chat-modal-actions">
+          <button class="chat-ghost" id="providerCancelEdit" type="button" hidden>取消编辑</button>
+          <span class="grow"></span>
+          <button class="btn primary" id="providerSaveBtn" type="submit">保存配置</button>
+        </div>
+        <div class="chat-form-status" id="providerStatus"></div>
+      </form>
+    </div>
+  </div>
+</div>
 <input type="file" id="imgInput" accept="image/*" hidden>
 <input type="file" id="mdInput" accept=".md,.markdown,.txt,text/markdown,text/plain" multiple hidden>
 <script src="/static/dataport.js"></script>
 <script src="/static/script.js"></script>
+<script src="/static/chat.js"></script>
 </body>
 </html>

@@ -165,9 +165,23 @@ def test_same_origin_and_referer_are_allowed(ai_client):
         ).status_code
         == 200
     )
+    # Desktop opens the SPA at "/?desktop=1"; its Referer must remain acceptable.
+    assert (
+        client.get(
+            "/api/v2/ai/providers", headers={"Referer": "http://testserver/?desktop=1"}
+        ).status_code
+        == 200
+    )
     assert (
         client.get(
             "/api/v2/ai/providers", headers={"Referer": "http://evil.example/index.html"}
+        ).status_code
+        == 403
+    )
+    # An Origin must stay a bare origin, never a path or query.
+    assert (
+        client.get(
+            "/api/v2/ai/providers", headers={"Origin": "http://testserver/?desktop=1"}
         ).status_code
         == 403
     )

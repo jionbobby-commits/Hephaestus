@@ -21,8 +21,10 @@ import secrets
 import sys
 import threading
 import time
+import webbrowser
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from desktop import __version__
 from desktop.dialogs import show_error, show_info
@@ -110,6 +112,25 @@ class DesktopBridge:
 
     def capability_token(self) -> str:
         return self._token
+
+    def open_external(self, url: str) -> bool:
+        """Open an http(s) link in the user's browser, never inside the app."""
+        raw = str(url or "").strip()
+        if not raw:
+            return False
+        try:
+            parts = urlsplit(raw)
+        except ValueError:
+            return False
+        if parts.scheme.lower() not in {"http", "https"}:
+            return False
+        if not parts.netloc or parts.username or parts.password:
+            return False
+        try:
+            return bool(webbrowser.open(raw, new=2))
+        except Exception:
+            LOGGER.warning("打开外部链接失败（未记录链接内容）")
+            return False
 
 
 def prepare_environment(

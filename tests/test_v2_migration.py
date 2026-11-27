@@ -53,7 +53,7 @@ def test_migrate_copy_verify_and_idempotent(tmp_path: Path):
     assert report["summary"]["tag_count"] == 2
     assert report["summary"]["favorite_count"] == 1
     assert report["summary"]["trashed_count"] == 1
-    assert report["counts"] == {"notes": 2, "tags": 2, "note_tags": 1, "favorites": 1, "trashed": 1, "settings": 8}
+    assert report["counts"] == {"notes": 2, "tags": 2, "note_tags": 1, "favorites": 1, "trashed": 1, "settings": 9}
 
     verified = verify_against_snapshot(source, target)
     assert verified == {
@@ -61,7 +61,7 @@ def test_migrate_copy_verify_and_idempotent(tmp_path: Path):
         "checked_notes": 2,
         "checked_tags": 2,
         "checked_note_tags": 1,
-        "checked_settings": 8,
+        "checked_settings": 9,
         "frontend_state_preserved": True,
         "legacy_notes_count_preserved": True,
         "mismatches": [],
