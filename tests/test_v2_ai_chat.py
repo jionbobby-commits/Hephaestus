@@ -595,3 +595,26 @@ def test_unknown_conversation_returns_unified_404(chat_env):
     response = _send(chat_env["client"], "does-not-exist", "hello")
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "not_found"
+
+
+def test_validation_error_uses_unified_ai_envelope(chat_env):
+    response = chat_env["client"].post(
+        "/api/v2/ai/conversations", json={"title": "缺少 provider_id"}
+    )
+    assert response.status_code == 422
+    body = response.json()
+    assert "detail" not in body
+    assert body["error"]["code"] == "invalid_request"
+    assert body["error"]["details"]["errors"]
+
+
+def test_dependency_error_uses_unified_ai_envelope(chat_env):
+    response = chat_env["client"].get(
+        "/api/v2/ai/conversations",
+        headers={"X-Hephaestus-Platform": "robot"},
+    )
+    assert response.status_code == 422
+    body = response.json()
+    assert "detail" not in body
+    assert body["error"]["code"] == "invalid_request"
+    assert "X-Hephaestus-Platform" in body["error"]["message"]
