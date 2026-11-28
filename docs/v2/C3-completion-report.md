@@ -33,7 +33,7 @@
 Windows 已完成并通过真实 WebView2 自动化验收：
 
 - `DesktopBridge.capability_token()` 为页面提供能力令牌；DataPort 只在内存保存，并只对 `/api/v2/ai/` 请求注入 `X-Hephaestus-Capability`；同时发送 `X-Hephaestus-Platform: desktop`。
-- 桌面端 Ollama/在线 Provider 配置、模型选择、流式 SSE、停止、重新生成、刷新恢复均通过同一套前端和 DataPort 路径工作。
+- 桌面端 Provider 配置、模型选择、流式 SSE、停止、重新生成、刷新恢复均通过同一套前端和 DataPort 路径工作；验收使用本地 mock Ollama，未调用真实在线或收费 API。
 - 桥接不可用时，聊天界面显示明确错误，不伪造成功；普通浏览器无法安全取得令牌时保持 AI 不可用。
 - 外部链接通过 `DesktopBridge.open_external()` 打开，仅允许 http/https 且拒绝凭据、javascript/file/data 等协议。
 - 修复桌面页面 Referer 带 `?desktop=1` 被误判为跨站的问题；Origin 仍严格校验，未放宽 C1.1 的 Host/Origin/SSRF 边界。
