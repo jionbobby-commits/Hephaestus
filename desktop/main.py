@@ -17,11 +17,14 @@ import json
 import logging
 import multiprocessing
 import os
+import secrets
 import sys
 import threading
 import time
+import webbrowser
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from desktop import __version__
 from desktop.dialogs import show_error, show_info
@@ -88,6 +91,48 @@ def assert_safe_database_location(db_path: Path) -> None:
             raise RuntimeError(f"数据库路径位于打包临时目录，已中止启动: {db_path}")
 
 
+def ensure_capability_token() -> str:
+    """Create the per-launch capability token before the backend is imported.
+
+    The token stays in this process and in the native bridge. It is never
+    written to logs, the database, URL or the frontend static files.
+    """
+    token = os.environ.get("HEPHAESTUS_AI_TOKEN", "").strip()
+    if len(token) < 32:
+        token = secrets.token_urlsafe(48)
+        os.environ["HEPHAESTUS_AI_TOKEN"] = token
+    return token
+
+
+class DesktopBridge:
+    """Minimal pywebview bridge for the trusted local page."""
+
+    def __init__(self, token: str) -> None:
+        self._token = token
+
+    def capability_token(self) -> str:
+        return self._token
+
+    def open_external(self, url: str) -> bool:
+        """Open an http(s) link in the user's browser, never inside the app."""
+        raw = str(url or "").strip()
+        if not raw:
+            return False
+        try:
+            parts = urlsplit(raw)
+        except ValueError:
+            return False
+        if parts.scheme.lower() not in {"http", "https"}:
+            return False
+        if not parts.netloc or parts.username or parts.password:
+            return False
+        try:
+            return bool(webbrowser.open(raw, new=2))
+        except Exception:
+            LOGGER.warning("打开外部链接失败（未记录链接内容）")
+            return False
+
+
 def prepare_environment(
     paths: AppPaths,
     import_db: Path | None = None,
@@ -97,6 +142,7 @@ def prepare_environment(
     assert_safe_database_location(paths.db_path)
     os.environ["HEPHAESTUS_DATABASE_URL"] = paths.database_url
     os.environ["HEPHAESTUS_DESKTOP"] = "1"
+    ensure_capability_token()
     if import_db is not None:
         backup = import_database(import_db, paths)
         LOGGER.info("已导入指定数据库: source=%s target=%s backup=%s", import_db, paths.db_path, backup)
@@ -252,6 +298,7 @@ def run_window(args: argparse.Namespace) -> int:
         window = webview.create_window(
             "Hephaestus",
             page_url,
+            js_api=DesktopBridge(os.environ["HEPHAESTUS_AI_TOKEN"]),
             width=1280,
             height=820,
             min_size=(960, 600),

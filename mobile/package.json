@@ -1,0 +1,15 @@
+{
+  "name": "hephaestus-mobile",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Hephaestus mobile shell and TypeScript SQLite DataPort (V2 B1)",
+  "scripts": {
+    "test": "node --experimental-strip-types --experimental-sqlite --test tests/contract.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3"
+  }
+}

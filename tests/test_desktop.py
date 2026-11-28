@@ -30,7 +30,7 @@ import pytest
 
 from desktop import __version__
 from desktop.legacy import LegacyImportError, auto_import_legacy, import_database, is_sqlite_file
-from desktop.main import assert_safe_database_location, parse_args, prepare_environment
+from desktop.main import DesktopBridge, assert_safe_database_location, parse_args, prepare_environment
 from desktop.paths import resolve_paths, sqlite_url
 from desktop.server import BackendStartError, check_health, find_free_port, wait_for_health
 from desktop.single_instance import SingleInstance
@@ -556,3 +556,22 @@ def test_check_runtime_cli_writes_report(tmp_path: Path) -> None:
 def test_version_file_matches_package() -> None:
     assert (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip() == __version__
 
+
+
+def test_desktop_bridge_opens_only_safe_http_links(monkeypatch) -> None:
+    opened: list[str] = []
+    monkeypatch.setattr("desktop.main.webbrowser.open", lambda url, new=0: opened.append(url) or True)
+    bridge = DesktopBridge("x" * 48)
+    assert bridge.capability_token() == "x" * 48
+    assert bridge.open_external("https://example.com/docs?q=1") is True
+    assert opened == ["https://example.com/docs?q=1"]
+    for unsafe in (
+        "javascript:alert(1)",
+        "file:///C:/Windows/win.ini",
+        "data:text/html,<script>alert(1)</script>",
+        "https://user:pass@example.com/",
+        "//example.com/no-scheme",
+        "",
+    ):
+        assert bridge.open_external(unsafe) is False, unsafe
+    assert opened == ["https://example.com/docs?q=1"]

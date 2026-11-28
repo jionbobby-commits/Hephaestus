@@ -1,0 +1,69 @@
+{
+  "contract_version": "2.0",
+  "schema_version": 1,
+  "tag": {
+    "id": "tag_contract",
+    "name": "设计",
+    "color": "#48be80",
+    "created_at": "2026-11-23T12:00:00.000Z",
+    "updated_at": "2026-11-23T12:00:00.000Z"
+  },
+  "note": {
+    "id": "note_contract",
+    "title": "契约样本",
+    "content_html": "<p>你好，契约。</p>",
+    "content_text": "你好，契约。",
+    "category": "开发",
+    "tags": [
+      {
+        "id": "tag_contract",
+        "name": "设计",
+        "color": "#48be80",
+        "created_at": "2026-11-23T12:00:00.000Z",
+        "updated_at": "2026-11-23T12:00:00.000Z"
+      }
+    ],
+    "attachments": [],
+    "is_favorite": true,
+    "is_trashed": false,
+    "favorited_at": "2026-11-23T12:01:00.000Z",
+    "trashed_at": null,
+    "created_at": "2026-11-23T12:00:00.000Z",
+    "updated_at": "2026-11-23T12:02:00.000Z",
+    "revision": 3
+  },
+  "settings": {
+    "locale": "zh-CN",
+    "theme": "dark",
+    "layout": "list",
+    "sort": "updated",
+    "assistant_name": "赫淮斯托斯",
+    "assistant_style": "friendly",
+    "response_length": "medium",
+    "default_model": null
+  },
+  "provider": {
+    "id": "provider_contract",
+    "kind": "ollama",
+    "label": "本地 Ollama",
+    "base_url": "http://127.0.0.1:11434",
+    "model": "qwen3",
+    "enabled": true,
+    "is_default": false,
+    "params": {
+      "temperature": 0.7,
+      "max_tokens": 1024,
+      "top_p": 1.0,
+      "timeout_seconds": 30.0
+    },
+    "has_key": false,
+    "created_at": "2026-11-23T12:00:00.000Z",
+    "updated_at": "2026-11-23T12:00:00.000Z"
+  },
+  "page": {
+    "items": [],
+    "total": 0,
+    "page": 1,
+    "page_size": 20
+  }
+}

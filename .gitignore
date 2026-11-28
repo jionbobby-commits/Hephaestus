@@ -187,3 +187,10 @@ data/
 !build/
 build/*
 !build/Hephaestus.spec
+
+# V2 移动端：依赖与构建产物
+mobile/node_modules/
+mobile/build/
+mobile/dist/
+mobile/.capacitor/
+mobile/*.tsbuildinfo
